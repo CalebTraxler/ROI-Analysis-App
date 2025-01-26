@@ -74,7 +74,7 @@ def load_area_data(state, county=None):
     setup_coordinates_cache()
     
     # Load and preprocess the main data
-    df = pd.read_csv('Traxler-ROI/Neighborhood_zhvi_uc_sfrcondo_tier_0.33_0.67_sm_sa_month.csv')
+    df = pd.read_csv('Neighborhood_zhvi_uc_sfrcondo_tier_0.33_0.67_sm_sa_month.csv')
     
     if state:
         df = df[df['State'] == state]
@@ -190,7 +190,7 @@ def create_3d_roi_map(data):
 # Main app section
 @st.cache_data
 def load_initial_data():
-    return pd.read_csv('Real_Estate_Data/Neighborhood_zhvi_uc_sfrcondo_tier_0.33_0.67_sm_sa_month.csv')
+    return pd.read_csv('Neighborhood_zhvi_uc_sfrcondo_tier_0.33_0.67_sm_sa_month.csv')
 
 # Title and description
 st.title("3D Neighborhood ROI Analysis")
