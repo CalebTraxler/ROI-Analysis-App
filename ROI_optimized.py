@@ -331,19 +331,41 @@ def create_robust_fallback_map(data):
     
     scatter_data['color'] = scatter_data['ROI'].apply(get_color_by_roi)
     
+    # Create heatmap layer with exponential weighting (proven working method)
+    scatter_data['weighted_roi'] = np.exp(scatter_data['ROI'] / 50) - 1  # Exponential scaling
+    
+    # Create heatmap layer
+    heatmap_layer = pdk.Layer(
+        'HeatmapLayer',
+        scatter_data,
+        get_position=['Longitude', 'Latitude'],
+        get_weight='weighted_roi',
+        radiusPixels=60,
+        intensity=2,
+        threshold=0.02,
+        colorRange=[
+            [255, 255, 178, 100],  # Light yellow (low ROI)
+            [254, 204, 92, 150],   # Yellow
+            [253, 141, 60, 200],   # Orange
+            [240, 59, 32, 250],    # Red-Orange
+            [189, 0, 38, 255]      # Deep Red (high ROI)
+        ],
+        pickable=False
+    )
+    
     # Create scatter layer with better visibility
     scatter_layer = pdk.Layer(
         'ScatterplotLayer',
         scatter_data,
         get_position=['Longitude', 'Latitude'],
-        get_radius=150,
+        get_radius=30,  # Smaller radius for individual points
         get_fill_color='color',
         get_line_color=[255, 255, 255, 200],
         pickable=True,
-        opacity=0.9,
+        opacity=0.8,
         stroked=True,
         filled=True,
-        line_width_min_pixels=3,
+        line_width_min_pixels=2,
         radius_scale=1
     )
     
@@ -379,7 +401,7 @@ def create_robust_fallback_map(data):
     # Try to create deck with OpenStreetMap style
     try:
         deck = pdk.Deck(
-            layers=[grid_layer, scatter_layer],
+            layers=[grid_layer, heatmap_layer, scatter_layer],  # Include heatmap layer
             initial_view_state=view_state,
             map_style='https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',
             tooltip={
@@ -400,7 +422,7 @@ def create_robust_fallback_map(data):
         # Final fallback: no map style but with coordinate grid
         try:
             deck = pdk.Deck(
-                layers=[grid_layer, scatter_layer],
+                layers=[grid_layer, heatmap_layer, scatter_layer],  # Include heatmap layer
                 initial_view_state=view_state,
                 tooltip={
                     "html": "<b>{tooltip_text}</b>",
@@ -479,9 +501,8 @@ def create_3d_roi_map_optimized(data, use_satellite=False):
     
     scatter_data['color'] = scatter_data['ROI'].apply(get_color_by_roi)
 
-    # Create heatmap layer with better scaling
-    roi_normalized = (scatter_data['ROI'] - scatter_data['ROI'].min()) / (scatter_data['ROI'].max() - scatter_data['ROI'].min())
-    scatter_data['heatmap_weight'] = roi_normalized + 0.1  # Ensure minimum weight
+    # Create heatmap layer with exponential weighting for ROI (proven working method)
+    scatter_data['weighted_roi'] = np.exp(scatter_data['ROI'] / 50) - 1  # Exponential scaling for better heat intensity
     
     # Create layers
     layers = [
@@ -489,16 +510,16 @@ def create_3d_roi_map_optimized(data, use_satellite=False):
             'HeatmapLayer',
             scatter_data,
             get_position=['Longitude', 'Latitude'],
-            get_weight='heatmap_weight',
-            radiusPixels=100,
+            get_weight='weighted_roi',  # Use exponential weighting
+            radiusPixels=60,  # Smaller radius for sharper heat spots
             intensity=2,
-            threshold=0.01,
+            threshold=0.02,  # Lower threshold for more sensitive detection
             colorRange=[
                 [255, 255, 178, 100],  # Light yellow (low ROI)
-                [254, 217, 118, 150],  # Yellow
-                [254, 178, 76, 200],   # Orange
-                [253, 141, 60, 230],   # Red-Orange
-                [227, 26, 28, 255]     # Red (high ROI)
+                [254, 204, 92, 150],   # Yellow
+                [253, 141, 60, 200],   # Orange
+                [240, 59, 32, 250],    # Red-Orange
+                [189, 0, 38, 255]      # Deep Red (high ROI)
             ],
             pickable=False
         ),
@@ -506,7 +527,7 @@ def create_3d_roi_map_optimized(data, use_satellite=False):
             'ScatterplotLayer',
             scatter_data,
             get_position=['Longitude', 'Latitude'],
-            get_radius=50,
+            get_radius=30,  # Smaller radius for individual points
             get_fill_color='color',
             get_line_color=[255, 255, 255, 150],
             pickable=True,
@@ -718,9 +739,9 @@ def main():
                             # Add legend
                             st.markdown("""
                             **🎨 Color Legend:**
-                            - 🔴 **Red**: Lower ROI
-                            - 🟡 **Yellow**: Medium ROI  
-                            - 🟢 **Green**: Higher ROI
+                            - 🟡 **Light Yellow**: Lower ROI
+                            - 🟠 **Orange**: Medium ROI  
+                            - 🔴 **Deep Red**: Higher ROI
                             """)
                         else:
                             st.error("❌ Failed to create any map visualization")
