@@ -11,6 +11,7 @@ import pickle
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
+import requests
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -25,6 +26,20 @@ CACHE_DIR.mkdir(exist_ok=True)
 GEOCODE_CACHE_FILE = CACHE_DIR / "geocode_cache.pkl"
 PROCESSED_DATA_CACHE = CACHE_DIR / "processed_data_cache.pkl"
 
+# Default coordinates for major US counties (fallback data)
+DEFAULT_COORDINATES = {
+    "Los Angeles County": (34.0522, -118.2437),
+    "Cook County": (41.8781, -87.6298),
+    "Harris County": (29.7604, -95.3698),
+    "Maricopa County": (33.4484, -112.0740),
+    "San Diego County": (32.7157, -117.1611),
+    "Orange County": (33.7175, -117.8311),
+    "Miami-Dade County": (25.7617, -80.1918),
+    "Kings County": (40.6782, -73.9442),
+    "Dallas County": (32.7767, -96.7970),
+    "Queens County": (40.7282, -73.7949),
+}
+
 # Create a coordinates cache database with better indexing
 def setup_coordinates_cache():
     conn = sqlite3.connect('coordinates_cache.db')
@@ -35,6 +50,27 @@ def setup_coordinates_cache():
     c.execute('CREATE INDEX IF NOT EXISTS idx_state_county ON coordinates(state, county)')
     conn.commit()
     conn.close()
+
+# Check network connectivity
+@st.cache_data(ttl=300)  # Cache for 5 minutes
+def check_network_status():
+    """Check if external services are accessible"""
+    services = {
+        "geocoding": "https://nominatim.openstreetmap.org/status",
+        "mapbox": "https://api.mapbox.com/v1/",
+        "general": "https://httpbin.org/status/200"
+    }
+    
+    status = {}
+    for service, url in services.items():
+        try:
+            response = requests.get(url, timeout=5)
+            status[service] = response.status_code == 200 or response.status_code == 401  # 401 is OK for mapbox without token
+        except Exception as e:
+            logger.warning(f"Network check failed for {service}: {e}")
+            status[service] = False
+    
+    return status
 
 # Enhanced cache decorator for expensive computations
 @st.cache_data(ttl=86400)  # Cache for 24 hours
@@ -56,10 +92,51 @@ def save_location_to_cache(location_key, lat, lon, state, county):
     conn.commit()
     conn.close()
 
-# Batch geocoding with parallel processing and better error handling
-def batch_geocode_parallel(locations, state, county, max_workers=5):
-    """Parallel geocoding with rate limiting and better error handling"""
-    geolocator = Nominatim(user_agent="my_roi_app_v2")
+# Generate fallback coordinates using county center and random offsets
+def generate_fallback_coordinates(locations, state, county):
+    """Generate approximate coordinates when geocoding fails"""
+    fallback_coords = {}
+    
+    # Try to get county center from defaults
+    county_center = DEFAULT_COORDINATES.get(county)
+    if not county_center:
+        # Use state-based approximations (rough state centers)
+        state_centers = {
+            'CA': (36.7783, -119.4179),
+            'TX': (31.9686, -99.9018),
+            'FL': (27.7663, -82.6404),
+            'NY': (42.1657, -74.9481),
+            'PA': (41.2033, -77.1945),
+            'IL': (40.3363, -89.0022),
+            'OH': (40.3888, -82.7649),
+            'GA': (33.0406, -83.6431),
+            'NC': (35.5397, -79.8431),
+            'MI': (43.3266, -84.5361),
+        }
+        county_center = state_centers.get(state, (39.8283, -98.5795))  # Default to US center
+    
+    # Generate random offsets for each location to spread them around the county
+    np.random.seed(hash(county) % 2147483647)  # Consistent seed based on county name
+    
+    for i, location in enumerate(locations):
+        # Create small random offsets (within ~10 mile radius)
+        lat_offset = np.random.normal(0, 0.1)  # ~6.9 miles per 0.1 degree at equator
+        lon_offset = np.random.normal(0, 0.1)
+        
+        fallback_lat = county_center[0] + lat_offset
+        fallback_lon = county_center[1] + lon_offset
+        
+        fallback_coords[location] = (fallback_lat, fallback_lon)
+        
+        # Cache the fallback coordinates
+        location_key = f"{location}_{county}_{state}"
+        save_location_to_cache(location_key, fallback_lat, fallback_lon, state, county)
+    
+    return fallback_coords
+
+# Improved batch geocoding with better fallbacks
+def batch_geocode_with_fallback(locations, state, county, network_available=True):
+    """Geocoding with comprehensive fallback strategies"""
     results = {}
     
     # Check cache first for all locations
@@ -76,52 +153,49 @@ def batch_geocode_parallel(locations, state, county, max_workers=5):
     
     # If all locations are cached, return immediately
     if not uncached_locations:
+        logger.info(f"All {len(cached_locations)} locations found in cache")
         return cached_locations
     
-    logger.info(f"Found {len(cached_locations)} cached locations, geocoding {len(uncached_locations)} new locations")
+    # If network is not available, generate fallback coordinates
+    if not network_available:
+        logger.info(f"Network unavailable, generating fallback coordinates for {len(uncached_locations)} locations")
+        fallback_coords = generate_fallback_coordinates(uncached_locations, state, county)
+        results.update(fallback_coords)
+        results.update(cached_locations)
+        return results
     
-    def geocode_single(loc):
-        """Geocode a single location with retry logic"""
-        location_key = f"{loc}_{county}_{state}"
-        max_retries = 3
-        
-        for attempt in range(max_retries):
-            try:
-                # Add longer timeout and better error handling for Streamlit Cloud
-                location = geolocator.geocode(f"{loc}, {county} County, {state}, USA", timeout=30)
-                if location:
-                    save_location_to_cache(location_key, location.latitude, location.longitude, state, county)
-                    return loc, (location.latitude, location.longitude)
-                else:
-                    return loc, (None, None)
-            except Exception as e:
-                logger.warning(f"Attempt {attempt + 1} failed for {loc}: {str(e)}")
-                if attempt < max_retries - 1:
-                    time.sleep(2 ** attempt)  # Exponential backoff
-                else:
-                    logger.error(f"Failed to geocode {loc} after {max_retries} attempts")
-                    return loc, (None, None)
-        
-        return loc, (None, None)
+    # Try geocoding for uncached locations
+    logger.info(f"Found {len(cached_locations)} cached locations, attempting to geocode {len(uncached_locations)} new locations")
     
-    # Use fewer workers and longer delays for Streamlit Cloud compatibility
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        future_to_loc = {executor.submit(geocode_single, loc): loc for loc in uncached_locations}
-        
-        for future in as_completed(future_to_loc):
-            loc = future_to_loc[future]
-            try:
-                result = future.result()
-                if result:
-                    results[result[0]] = result[1]
-                # Add longer delay between requests for Streamlit Cloud
-                time.sleep(2)
-            except Exception as e:
-                logger.error(f"Exception occurred while geocoding {loc}: {e}")
+    geolocator = Nominatim(user_agent="roi_analysis_app_v3", timeout=15)
+    geocoded_count = 0
+    
+    for loc in uncached_locations[:10]:  # Limit to 10 requests to avoid rate limiting
+        try:
+            time.sleep(1)  # Rate limiting
+            location = geolocator.geocode(f"{loc}, {county} County, {state}, USA")
+            if location:
+                results[loc] = (location.latitude, location.longitude)
+                location_key = f"{loc}_{county}_{state}"
+                save_location_to_cache(location_key, location.latitude, location.longitude, state, county)
+                geocoded_count += 1
+            else:
                 results[loc] = (None, None)
+        except Exception as e:
+            logger.warning(f"Geocoding failed for {loc}: {e}")
+            results[loc] = (None, None)
+    
+    # For remaining locations that couldn't be geocoded, use fallbacks
+    failed_locations = [loc for loc in uncached_locations if results.get(loc) == (None, None)]
+    if failed_locations:
+        logger.info(f"Generating fallback coordinates for {len(failed_locations)} failed geocoding attempts")
+        fallback_coords = generate_fallback_coordinates(failed_locations, state, county)
+        results.update(fallback_coords)
     
     # Combine cached and new results
     results.update(cached_locations)
+    logger.info(f"Successfully geocoded {geocoded_count} locations, used cache for {len(cached_locations)}, generated fallbacks for {len(failed_locations)}")
+    
     return results
 
 # Preprocess and cache the main dataset
@@ -150,17 +224,9 @@ def preprocess_main_dataset():
 
 # Optimized data loading with better caching
 @st.cache_data(ttl=3600)  # Cache for 1 hour
-def load_area_data_optimized(state, county):
+def load_area_data_optimized(state, county, network_available=True):
     """Optimized data loading with enhanced caching and fallback mechanisms"""
-    cache_key = f"{state}_{county}_data"
-    
-    # Try to load from cache first
-    cached_data = load_from_cache(cache_key)
-    if cached_data is not None:
-        logger.info(f"Loaded {len(cached_data)} rows from cache for {county}, {state}")
-        return cached_data
-    
-    logger.info(f"Loading and preprocessing data for {county}, {state}")
+    logger.info(f"Loading data for {county}, {state} (network available: {network_available})")
     
     # Load the main dataset
     df = preprocess_main_dataset()
@@ -172,18 +238,17 @@ def load_area_data_optimized(state, county):
         logger.warning(f"No data found for {county}, {state}")
         return pd.DataFrame()
     
-    # Try to get coordinates from cache first
-    coordinates = get_cached_coordinates(state, county)
-    
-    if coordinates is None or len(coordinates) == 0:
-        # If no cached coordinates, try to geocode
-        try:
-            logger.info(f"Geocoding {len(filtered_df)} locations for {county}, {state}")
-            coordinates = batch_geocode_parallel(filtered_df['RegionName'].unique(), state, county)
-        except Exception as e:
-            logger.error(f"Geocoding failed for {county}, {state}: {e}")
-            # Fallback: generate default coordinates based on state center
-            coordinates = generate_fallback_coordinates(filtered_df, state, county)
+    # Get coordinates with fallback support
+    try:
+        coordinates = batch_geocode_with_fallback(
+            filtered_df['RegionName'].unique(), 
+            state, 
+            county, 
+            network_available
+        )
+    except Exception as e:
+        logger.error(f"Coordinate lookup failed for {county}, {state}: {e}")
+        coordinates = generate_fallback_coordinates(filtered_df['RegionName'].unique(), state, county)
     
     # Add coordinates to dataframe
     filtered_df['Latitude'] = filtered_df['RegionName'].map(lambda x: coordinates.get(x, (None, None))[0] if coordinates.get(x) else None)
@@ -202,107 +267,12 @@ def load_area_data_optimized(state, county):
         # Calculate ROI
         filtered_df['ROI'] = ((filtered_df['Current_Value'] - filtered_df['First_Value']) / filtered_df['First_Value'] * 100).fillna(0)
     
-    # Cache the processed data
-    cache_processed_data(cache_key, filtered_df)
-    
-    logger.info(f"Processed {len(filtered_df)} rows for {county}, {state}")
+    logger.info(f"Processed {len(filtered_df)} rows for {county}, {state} with {filtered_df['Latitude'].notna().sum()} valid coordinates")
     return filtered_df
 
-def generate_fallback_coordinates(df, state, county):
-    """Generate fallback coordinates when geocoding fails"""
-    logger.info(f"Generating fallback coordinates for {county}, {state}")
-    
-    # State center coordinates (approximate)
-    state_centers = {
-        'CA': (36.7783, -119.4179),  # California
-        'CO': (39.5501, -105.7821),  # Colorado
-        'TX': (31.9686, -99.9018),   # Texas
-        'FL': (27.6648, -81.5158),   # Florida
-        'NY': (42.1657, -74.9481),   # New York
-        'IL': (40.6331, -89.3985),   # Illinois
-        'PA': (40.5908, -77.2098),   # Pennsylvania
-        'OH': (40.4173, -82.9071),   # Ohio
-        'GA': (32.1656, -82.9001),   # Georgia
-        'NC': (35.7596, -79.0193),   # North Carolina
-    }
-    
-    # Get state center coordinates
-    state_lat, state_lon = state_centers.get(state, (39.8283, -98.5795))  # Default to US center
-    
-    # Generate coordinates for each neighborhood with slight variations
-    coordinates = {}
-    for i, neighborhood in enumerate(df['RegionName'].unique()):
-        # Add small random variations to spread out neighborhoods
-        import random
-        random.seed(hash(neighborhood) % 1000)  # Deterministic but varied
-        
-        lat_offset = (random.random() - 0.5) * 0.5  # ±0.25 degrees
-        lon_offset = (random.random() - 0.5) * 0.5  # ±0.25 degrees
-        
-        coordinates[neighborhood] = (state_lat + lat_offset, state_lon + lon_offset)
-    
-    logger.info(f"Generated {len(coordinates)} fallback coordinates for {county}, {state}")
-    return coordinates
-
-# Additional caching for coordinates
-def get_cached_coordinates(state, county):
-    """Get cached coordinates for a state-county combination"""
-    cache_key = f"{state}_{county}_coordinates"
-    if PROCESSED_DATA_CACHE.exists():
-        try:
-            with open(PROCESSED_DATA_CACHE, 'rb') as f:
-                cache_data = pickle.load(f)
-                return cache_data.get(cache_key)
-        except Exception as e:
-            logger.warning(f"Failed to load coordinate cache: {e}")
-    return None
-
-def cache_coordinates(state, county, coordinates):
-    """Cache coordinates for a state-county combination"""
-    cache_key = f"{state}_{county}_coordinates"
-    try:
-        cache_data = {}
-        if PROCESSED_DATA_CACHE.exists():
-            with open(PROCESSED_DATA_CACHE, 'rb') as f:
-                cache_data = pickle.load(f)
-        
-        cache_data[cache_key] = coordinates
-        
-        with open(PROCESSED_DATA_CACHE, 'wb') as f:
-            pickle.dump(cache_data, f)
-    except Exception as e:
-        logger.warning(f"Failed to save coordinate cache: {e}")
-
-# Add missing caching functions
-def load_from_cache(cache_key):
-    """Load processed data from cache"""
-    if PROCESSED_DATA_CACHE.exists():
-        try:
-            with open(PROCESSED_DATA_CACHE, 'rb') as f:
-                cache_data = pickle.load(f)
-                return cache_data.get(cache_key)
-        except Exception as e:
-            logger.warning(f"Failed to load processed data cache: {e}")
-    return None
-
-def cache_processed_data(cache_key, data):
-    """Cache processed data"""
-    try:
-        cache_data = {}
-        if PROCESSED_DATA_CACHE.exists():
-            with open(PROCESSED_DATA_CACHE, 'rb') as f:
-                cache_data = pickle.load(f)
-        
-        cache_data[cache_key] = data
-        
-        with open(PROCESSED_DATA_CACHE, 'wb') as f:
-            pickle.dump(cache_data, f)
-    except Exception as e:
-        logger.warning(f"Failed to save processed data cache: {e}")
-
-# Optimized 3D map creation
-def create_3d_roi_map_optimized(data):
-    """Optimized version of create_3d_roi_map"""
+# Enhanced 3D map creation with better map styles
+def create_3d_roi_map_optimized(data, use_satellite=False):
+    """Enhanced map creation with better fallback options and styling"""
     if len(data) == 0:
         return None
     
@@ -337,7 +307,7 @@ def create_3d_roi_map_optimized(data):
     # Format the data and create color scale based on ROI
     scatter_data = valid_data.copy()
     scatter_data['tooltip_text'] = scatter_data.apply(
-        lambda row: f"{row['RegionName']}<br/>${row['Current_Value']:,.2f}<br/>ROI: {row['ROI']:.2f}%",
+        lambda row: f"{row['RegionName']}<br/>${row['Current_Value']:,.0f}<br/>ROI: {row['ROI']:.1f}%",
         axis=1
     )
     
@@ -350,100 +320,140 @@ def create_3d_roi_map_optimized(data):
             normalized = 0.5
         else:
             normalized = (roi - min_roi) / (max_roi - min_roi)
-        # Create color gradient from light to dark orange
-        return [
-            255,  # R
-            int(140 * (1 - normalized)),  # G (decreases with higher ROI)
-            0,    # B
-            180   # Alpha (transparency)
-        ]
+        
+        # Create color gradient from red (low) to green (high)
+        if normalized < 0.5:
+            # Red to Yellow
+            return [255, int(255 * normalized * 2), 0, 200]
+        else:
+            # Yellow to Green
+            return [int(255 * (1 - (normalized - 0.5) * 2)), 255, 0, 200]
     
     scatter_data['color'] = scatter_data['ROI'].apply(get_color_by_roi)
 
-    # Create heatmap layer with exponential weighting for ROI
-    scatter_data['weighted_roi'] = np.exp(scatter_data['ROI'] / 50) - 1  # Exponential scaling
+    # Create heatmap layer with better scaling
+    roi_normalized = (scatter_data['ROI'] - scatter_data['ROI'].min()) / (scatter_data['ROI'].max() - scatter_data['ROI'].min())
+    scatter_data['heatmap_weight'] = roi_normalized + 0.1  # Ensure minimum weight
     
-    # Create the deck with improved configuration for better compatibility
-    deck = pdk.Deck(
-        layers=[
-            pdk.Layer(
-                'HeatmapLayer',
-                scatter_data,
-                get_position=['Longitude', 'Latitude'],
-                get_weight='weighted_roi',
-                radiusPixels=60,
-                intensity=1.0,
-                threshold=0.01,
-                colorRange=[
-                    [255, 255, 178, 100],  # Light yellow
-                    [254, 204, 92, 150],   # Yellow
-                    [253, 141, 60, 200],   # Orange
-                    [240, 59, 32, 250],    # Red-Orange
-                    [189, 0, 38, 255]      # Deep Red
-                ],
-                pickable=False
-            ),
-            pdk.Layer(
-                'ScatterplotLayer',
-                scatter_data,
-                get_position=['Longitude', 'Latitude'],
-                get_radius=30,
-                get_fill_color='color',
-                get_line_color=[255, 255, 255, 100],
-                pickable=True,
-                opacity=0.8,
-                stroked=True,
-                filled=True,
-                line_width_min_pixels=1
+    # Choose map style based on availability
+    map_styles = [
+        'mapbox://styles/mapbox/satellite-streets-v11' if use_satellite else 'mapbox://styles/mapbox/dark-v10',
+        'mapbox://styles/mapbox/streets-v11',
+        'mapbox://styles/mapbox/light-v10',
+        None  # No map style (just layers)
+    ]
+    
+    layers = [
+        pdk.Layer(
+            'HeatmapLayer',
+            scatter_data,
+            get_position=['Longitude', 'Latitude'],
+            get_weight='heatmap_weight',
+            radiusPixels=100,
+            intensity=2,
+            threshold=0.01,
+            colorRange=[
+                [255, 255, 178, 100],  # Light yellow (low ROI)
+                [254, 217, 118, 150],  # Yellow
+                [254, 178, 76, 200],   # Orange
+                [253, 141, 60, 230],   # Red-Orange
+                [227, 26, 28, 255]     # Red (high ROI)
+            ],
+            pickable=False
+        ),
+        pdk.Layer(
+            'ScatterplotLayer',
+            scatter_data,
+            get_position=['Longitude', 'Latitude'],
+            get_radius=50,
+            get_fill_color='color',
+            get_line_color=[255, 255, 255, 150],
+            pickable=True,
+            opacity=0.8,
+            stroked=True,
+            filled=True,
+            line_width_min_pixels=2,
+            radius_scale=1
+        )
+    ]
+
+    # Try different map styles until one works
+    for map_style in map_styles:
+        try:
+            deck = pdk.Deck(
+                layers=layers,
+                initial_view_state=view_state,
+                map_style=map_style,
+                tooltip={
+                    "html": "<b>{tooltip_text}</b>",
+                    "style": {
+                        "backgroundColor": "rgba(0, 0, 0, 0.8)",
+                        "color": "white",
+                        "padding": "10px",
+                        "borderRadius": "5px",
+                        "fontSize": "12px"
+                    }
+                },
+                height=600
             )
-        ],
+            return deck
+        except Exception as e:
+            logger.warning(f"Failed to create map with style {map_style}: {e}")
+            continue
+    
+    # If all map styles fail, create a simple layer-only visualization
+    logger.info("Creating fallback visualization without base map")
+    deck = pdk.Deck(
+        layers=layers,
         initial_view_state=view_state,
-        map_style='mapbox://styles/mapbox/light-v10',  # Changed to light style for better visibility
         tooltip={
             "html": "<b>{tooltip_text}</b>",
             "style": {
-                "backgroundColor": "steelblue",
+                "backgroundColor": "rgba(0, 0, 0, 0.8)",
                 "color": "white",
                 "padding": "10px",
                 "borderRadius": "5px"
             }
         },
-        height=500,  # Reduced height for better compatibility
-        width=None   # Let it auto-size
+        height=600
     )
-
+    
     return deck
 
 # Main app section with performance optimizations
 def main():
+    # Initialize cache database
+    setup_coordinates_cache()
+    
     # Title and description
-    st.title("3D Neighborhood ROI Analysis")
+    st.title("🏠 3D Neighborhood ROI Analysis")
     
     st.markdown("""
-    This visualization shows Return on Investment (ROI) patterns across neighborhoods using a 3D map.
-    - Heat intensity represents the ROI percentage
-    - Color intensity indicates higher ROI values
-    - Hover over points to see detailed information
+    **Interactive visualization of real estate Return on Investment (ROI) patterns**
+    - 🔥 **Heat intensity** represents ROI concentration
+    - 🎨 **Colors** range from red (low ROI) to green (high ROI)
+    - 🖱️ **Hover** over points for detailed information
     """)
     
-    # Network status indicator
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("**Network Status**")
+    # Check network status
+    network_status = check_network_status()
+    network_available = any(network_status.values())
     
-    # Check if we can reach external services
-    try:
-        import requests
-        response = requests.get("https://nominatim.openstreetmap.org", timeout=5)
-        if response.status_code == 200:
-            st.sidebar.success("✅ External services accessible")
-            network_available = True
-        else:
-            st.sidebar.warning("⚠️ Limited external access")
-            network_available = False
-    except:
-        st.sidebar.error("❌ No external network access")
-        st.sidebar.info("Using cached coordinates only")
-        network_available = False
+    # Network status indicator
+    st.sidebar.markdown("### 🌐 Network Status")
+    
+    if network_status.get('geocoding', False):
+        st.sidebar.success("✅ Geocoding service accessible")
+    else:
+        st.sidebar.warning("⚠️ Geocoding service unavailable")
+    
+    if network_status.get('general', False):
+        st.sidebar.success("✅ Internet connection active")
+    else:
+        st.sidebar.error("❌ Limited internet access")
+    
+    if not network_available:
+        st.sidebar.info("ℹ️ Using cached data and fallback coordinates")
     
     # Performance optimization: Load states and counties once
     @st.cache_data(ttl=3600)
@@ -456,107 +466,172 @@ def main():
             state_county_map[state] = sorted(state_data['CountyName'].unique())
         return sorted(states), state_county_map
     
-    states, state_county_map = get_states_and_counties()
+    try:
+        states, state_county_map = get_states_and_counties()
+    except Exception as e:
+        st.error(f"Error loading dataset: {e}")
+        st.info("Please ensure the CSV file 'Neighborhood_zhvi_uc_sfrcondo_tier_0.33_0.67_sm_sa_month.csv' is in the same directory.")
+        return
     
     # Sidebar selection
-    selected_state = st.sidebar.selectbox("Select State", states)
+    selected_state = st.sidebar.selectbox("🗺️ Select State", states, key="state_select")
     
     if selected_state:
         counties = state_county_map[selected_state]
-        selected_county = st.sidebar.selectbox("Select County", counties)
+        selected_county = st.sidebar.selectbox("🏘️ Select County", counties, key="county_select")
+        
+        # Map style options
+        st.sidebar.markdown("### 🎨 Visualization Options")
+        use_satellite = st.sidebar.checkbox("🛰️ Satellite view", help="Use satellite imagery as base map (requires network)")
         
         # Performance metrics
-        st.sidebar.markdown("---")
-        st.sidebar.markdown("**Performance Info**")
+        st.sidebar.markdown("### 📊 Performance Info")
         
         # Progress indicator with better UX
-        if selected_state and selected_county:
-            # Check if data is already cached
-            cache_key = f"{selected_state}_{selected_county}_data"
-            
-            with st.spinner('Loading data and generating visualization...'):
+        if selected_state and selected_county:            
+            with st.spinner('🔄 Loading data and generating visualization...'):
                 # Use progress bar for better user feedback
                 progress_bar = st.progress(0)
                 status_text = st.empty()
                 
-                status_text.text("Loading preprocessed data...")
+                status_text.text("📊 Loading preprocessed data...")
                 progress_bar.progress(25)
                 
-                status_text.text("Checking coordinate cache...")
+                status_text.text("📍 Checking coordinate cache...")
                 progress_bar.progress(50)
                 
-                status_text.text("Generating visualization...")
+                status_text.text("🗺️ Generating visualization...")
                 progress_bar.progress(75)
                 
                 try:
-                    data = load_area_data_optimized(selected_state, selected_county)
+                    data = load_area_data_optimized(selected_state, selected_county, network_available)
                     progress_bar.progress(100)
-                    status_text.text("Complete!")
+                    status_text.text("✅ Complete!")
+                    
+                    # Brief delay to show completion
+                    time.sleep(0.5)
+                    
                 except Exception as e:
-                    st.error(f"Error loading data: {str(e)}")
-                    st.info("Try selecting a different state/county or check the logs")
+                    st.error(f"❌ Error loading data: {str(e)}")
+                    st.info("💡 Try selecting a different state/county or check the logs")
                     return
-                
-                # Clear progress indicators
-                progress_bar.empty()
-                status_text.empty()
+                finally:
+                    # Clear progress indicators
+                    progress_bar.empty()
+                    status_text.empty()
                 
                 if len(data) > 0:
                     # Display statistics
-                    col1, col2, col3 = st.columns(3)
+                    col1, col2, col3, col4 = st.columns(4)
                     with col1:
-                        st.metric("Average ROI", f"{data['ROI'].mean():.2f}%")
+                        avg_roi = data['ROI'].mean()
+                        st.metric("📈 Average ROI", f"{avg_roi:.2f}%", delta=f"{avg_roi - data['ROI'].median():.1f}%")
                     with col2:
-                        st.metric("Median Home Value", f"${data['Current_Value'].median():,.2f}")
+                        median_value = data['Current_Value'].median()
+                        st.metric("🏠 Median Home Value", f"${median_value:,.0f}")
                     with col3:
-                        st.metric("Number of Neighborhoods", len(data))
+                        st.metric("🏘️ Neighborhoods", len(data))
+                    with col4:
+                        coord_coverage = (data['Latitude'].notna().sum() / len(data)) * 100
+                        st.metric("📍 Coordinate Coverage", f"{coord_coverage:.0f}%")
                     
-                    # Check if we have coordinates for visualization
-                    if data['Latitude'].isna().sum() == len(data):
-                        st.warning("⚠️ No coordinates available for visualization. The app may be experiencing network restrictions.")
-                        st.info("Try refreshing the page or selecting a different location.")
-                    else:
-                        # Check if we're using fallback coordinates
-                        if data['Latitude'].notna().sum() > 0:
-                            # Show info about coordinate source
-                            if data['Latitude'].iloc[0] is not None:
-                                st.success(f"✅ Map displaying {data['Latitude'].notna().sum()} neighborhoods")
-                                if "fallback" in str(data.get('coordinate_source', '')):
-                                    st.info("ℹ️ Using approximate coordinates due to network restrictions")
-                        
-                        # Create and display the map
-                        map_chart = create_3d_roi_map_optimized(data)
+                    # Check coordinate availability and show appropriate message
+                    valid_coords = data['Latitude'].notna().sum()
+                    if valid_coords == 0:
+                        st.error("❌ No coordinates available for visualization")
+                        st.info("🔧 This might be due to network restrictions. Try refreshing or contact support.")
+                    elif valid_coords < len(data):
+                        if not network_available:
+                            st.info(f"ℹ️ Using cached coordinates for {valid_coords} locations and generated fallback coordinates for the rest")
+                        else:
+                            st.warning(f"⚠️ Coordinates available for {valid_coords}/{len(data)} locations")
+                    
+                    # Create and display the map
+                    if valid_coords > 0:
+                        map_chart = create_3d_roi_map_optimized(data, use_satellite and network_available)
                         if map_chart:
                             st.pydeck_chart(map_chart, use_container_width=True)
+                            
+                            # Add legend
+                            st.markdown("""
+                            **🎨 Color Legend:**
+                            - 🔴 **Red**: Lower ROI
+                            - 🟡 **Yellow**: Medium ROI  
+                            - 🟢 **Green**: Higher ROI
+                            """)
                         else:
-                            st.error("Failed to create map visualization")
+                            st.error("❌ Failed to create map visualization")
                     
-                    # Add data table with pagination for better performance
-                    with st.expander("View Raw Data"):
-                        # Add search functionality
-                        search_term = st.text_input("Search neighborhoods:", key="search_input")
+                    # ROI Distribution
+                    st.subheader("📊 ROI Distribution")
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        # Top performers
+                        top_roi = data.nlargest(10, 'ROI')[['RegionName', 'ROI', 'Current_Value']]
+                        st.markdown("**🏆 Top ROI Performers**")
+                        st.dataframe(top_roi, use_container_width=True, hide_index=True)
+                    
+                    with col2:
+                        # Bottom performers
+                        bottom_roi = data.nsmallest(10, 'ROI')[['RegionName', 'ROI', 'Current_Value']]
+                        st.markdown("**📉 Lowest ROI Areas**")
+                        st.dataframe(bottom_roi, use_container_width=True, hide_index=True)
+                    
+                    # Add data table with enhanced search and pagination
+                    with st.expander("📋 View Complete Data Table"):
+                        # Search and filter options
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            search_term = st.text_input("🔍 Search neighborhoods:", key="search_input")
+                        with col2:
+                            min_roi = st.number_input("📈 Min ROI %:", value=float(data['ROI'].min()), key="min_roi")
+                        with col3:
+                            max_roi = st.number_input("📈 Max ROI %:", value=float(data['ROI'].max()), key="max_roi")
+                        
+                        # Apply filters
+                        filtered_data = data.copy()
                         if search_term:
-                            filtered_data = data[data['RegionName'].str.contains(search_term, case=False, na=False)]
-                        else:
-                            filtered_data = data
+                            filtered_data = filtered_data[filtered_data['RegionName'].str.contains(search_term, case=False, na=False)]
+                        filtered_data = filtered_data[(filtered_data['ROI'] >= min_roi) & (filtered_data['ROI'] <= max_roi)]
+                        
+                        # Sort options
+                        sort_by = st.selectbox("📊 Sort by:", ['ROI', 'Current_Value', 'RegionName'], key="sort_select")
+                        sort_order = st.radio("📈 Order:", ['Descending', 'Ascending'], key="sort_order", horizontal=True)
+                        ascending = sort_order == 'Ascending'
+                        
+                        filtered_data = filtered_data.sort_values(sort_by, ascending=ascending)
                         
                         # Pagination
-                        page_size = 50
-                        total_pages = (len(filtered_data) + page_size - 1) // page_size
-                        page = st.selectbox("Page:", range(1, total_pages + 1), key="page_select")
+                        page_size = st.selectbox("📄 Items per page:", [25, 50, 100], index=1, key="page_size")
+                        total_pages = max(1, (len(filtered_data) + page_size - 1) // page_size)
+                        page = st.selectbox("📖 Page:", range(1, total_pages + 1), key="page_select")
                         
                         start_idx = (page - 1) * page_size
                         end_idx = start_idx + page_size
                         page_data = filtered_data.iloc[start_idx:end_idx]
                         
-                        st.dataframe(
-                            page_data[['RegionName', 'Current_Value', 'ROI']].sort_values('ROI', ascending=False),
-                            use_container_width=True
-                        )
+                        # Display table with better formatting
+                        display_data = page_data[['RegionName', 'Current_Value', 'ROI', 'First_Value']].copy()
+                        display_data['Current_Value'] = display_data['Current_Value'].apply(lambda x: f"${x:,.0f}" if pd.notna(x) else "N/A")
+                        display_data['First_Value'] = display_data['First_Value'].apply(lambda x: f"${x:,.0f}" if pd.notna(x) else "N/A")
+                        display_data['ROI'] = display_data['ROI'].apply(lambda x: f"{x:.2f}%" if pd.notna(x) else "N/A")
+                        display_data.columns = ['Neighborhood', 'Current Value', 'ROI %', 'Initial Value']
                         
-                        st.caption(f"Showing {start_idx + 1}-{min(end_idx, len(filtered_data))} of {len(filtered_data)} neighborhoods")
+                        st.dataframe(display_data, use_container_width=True, hide_index=True)
+                        st.caption(f"📍 Showing {start_idx + 1}-{min(end_idx, len(filtered_data))} of {len(filtered_data)} neighborhoods")
+                        
+                        # Download data option
+                        csv_data = filtered_data.to_csv(index=False)
+                        st.download_button(
+                            label="💾 Download filtered data as CSV",
+                            data=csv_data,
+                            file_name=f"{selected_county}_{selected_state}_roi_data.csv",
+                            mime="text/csv"
+                        )
                 else:
-                    st.warning("No data found for the selected state and county combination.")
+                    st.warning(f"❌ No data found for {selected_county}, {selected_state}")
+                    st.info("💡 Try selecting a different state and county combination")
 
 if __name__ == "__main__":
     main()
