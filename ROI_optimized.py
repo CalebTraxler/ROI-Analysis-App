@@ -18,7 +18,82 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Must be the first Streamlit command
-st.set_page_config(page_title="3D ROI Analysis", layout="wide")
+st.set_page_config(
+    page_title="Real Estate ROI Analysis Dashboard",
+    page_icon="📊",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Custom CSS for professional styling
+st.markdown("""
+<style>
+    .main-header {
+        font-size: 2.5rem;
+        font-weight: 600;
+        color: #1f2937;
+        margin-bottom: 1rem;
+        border-bottom: 3px solid #3b82f6;
+        padding-bottom: 0.5rem;
+    }
+    
+    .metric-container {
+        background-color: #f8fafc;
+        padding: 1rem;
+        border-radius: 8px;
+        border-left: 4px solid #3b82f6;
+        margin: 0.5rem 0;
+    }
+    
+    .section-header {
+        font-size: 1.5rem;
+        font-weight: 500;
+        color: #374151;
+        margin: 2rem 0 1rem 0;
+        padding: 0.5rem 0;
+        border-bottom: 2px solid #e5e7eb;
+    }
+    
+    .sidebar-section {
+        background-color: #f9fafb;
+        padding: 1rem;
+        border-radius: 6px;
+        margin: 0.5rem 0;
+        border: 1px solid #e5e7eb;
+    }
+    
+    .data-table {
+        background-color: #ffffff;
+        border-radius: 8px;
+        padding: 1rem;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    }
+    
+    .success-box {
+        background-color: #d1fae5;
+        border: 1px solid #10b981;
+        border-radius: 6px;
+        padding: 0.75rem;
+        color: #065f46;
+    }
+    
+    .warning-box {
+        background-color: #fef3c7;
+        border: 1px solid #f59e0b;
+        border-radius: 6px;
+        padding: 0.75rem;
+        color: #92400e;
+    }
+    
+    .info-box {
+        background-color: #dbeafe;
+        border: 1px solid #3b82f6;
+        border-radius: 6px;
+        padding: 0.75rem;
+        color: #1e40af;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # Constants
 CACHE_DIR = Path("cache")
@@ -643,35 +718,34 @@ def main():
     # Initialize cache database
     setup_coordinates_cache()
     
-    # Title and description
-    st.title("🏠 3D Neighborhood ROI Analysis")
+    # Title and description with professional styling
+    st.markdown('<h1 class="main-header">Real Estate ROI Analysis Dashboard</h1>', unsafe_allow_html=True)
     
     st.markdown("""
-    **Interactive visualization of real estate Return on Investment (ROI) patterns**
-    - 🔥 **Heat intensity** represents ROI concentration
-    - 🎨 **Colors** range from red (low ROI) to green (high ROI)
-    - 🖱️ **Hover** over points for detailed information
+    **Interactive visualization of real estate Return on Investment (ROI) patterns across neighborhoods**
+    
+    The dashboard provides comprehensive analysis of property value trends, ROI performance metrics, and geographic distribution patterns to support data-driven investment decisions.
     """)
     
     # Check network status
     network_status = check_network_status()
     network_available = any(network_status.values())
     
-    # Network status indicator
-    st.sidebar.markdown("### 🌐 Network Status")
+    # Network status indicator with professional styling
+    st.sidebar.markdown("### Network Status")
     
     if network_status.get('geocoding', False):
-        st.sidebar.success("✅ Geocoding service accessible")
+        st.sidebar.success("Geocoding service accessible")
     else:
-        st.sidebar.warning("⚠️ Geocoding service unavailable")
+        st.sidebar.warning("Geocoding service unavailable")
     
     if network_status.get('general', False):
-        st.sidebar.success("✅ Internet connection active")
+        st.sidebar.success("Internet connection active")
     else:
-        st.sidebar.error("❌ Limited internet access")
+        st.sidebar.error("Limited internet access")
     
     if not network_available:
-        st.sidebar.info("ℹ️ Using cached data and fallback coordinates")
+        st.sidebar.info("Using cached data and fallback coordinates")
     
     # Performance optimization: Load states and counties once
     @st.cache_data(ttl=3600)
@@ -691,47 +765,47 @@ def main():
         st.info("Please ensure the CSV file 'Neighborhood_zhvi_uc_sfrcondo_tier_0.33_0.67_sm_sa_month.csv' is in the same directory.")
         return
     
-    # Sidebar selection
-    selected_state = st.sidebar.selectbox("🗺️ Select State", states, key="state_select")
+    # Sidebar selection with professional labels
+    selected_state = st.sidebar.selectbox("Select State", states, key="state_select")
     
     if selected_state:
         counties = state_county_map[selected_state]
-        selected_county = st.sidebar.selectbox("🏘️ Select County", counties, key="county_select")
+        selected_county = st.sidebar.selectbox("Select County", counties, key="county_select")
         
         # Map style options
-        st.sidebar.markdown("### 🎨 Visualization Options")
-        use_satellite = st.sidebar.checkbox("🛰️ Satellite view", help="Use satellite imagery as base map (requires network)")
+        st.sidebar.markdown("### Visualization Options")
+        use_satellite = st.sidebar.checkbox("Satellite view", help="Use satellite imagery as base map (requires network)")
         
         # Performance metrics
-        st.sidebar.markdown("### 📊 Performance Info")
+        st.sidebar.markdown("### Performance Information")
         
-        # Progress indicator with better UX
+        # Progress indicator with professional UX
         if selected_state and selected_county:            
-            with st.spinner('🔄 Loading data and generating visualization...'):
+            with st.spinner('Loading data and generating visualization...'):
                 # Use progress bar for better user feedback
                 progress_bar = st.progress(0)
                 status_text = st.empty()
                 
-                status_text.text("📊 Loading preprocessed data...")
+                status_text.text("Loading preprocessed data...")
                 progress_bar.progress(25)
                 
-                status_text.text("📍 Checking coordinate cache...")
+                status_text.text("Checking coordinate cache...")
                 progress_bar.progress(50)
                 
-                status_text.text("🗺️ Generating visualization...")
+                status_text.text("Generating visualization...")
                 progress_bar.progress(75)
                 
                 try:
                     data = load_area_data_optimized(selected_state, selected_county, network_available)
                     progress_bar.progress(100)
-                    status_text.text("✅ Complete!")
+                    status_text.text("Complete!")
                     
                     # Brief delay to show completion
                     time.sleep(0.5)
                     
                 except Exception as e:
-                    st.error(f"❌ Error loading data: {str(e)}")
-                    st.info("💡 Try selecting a different state/county or check the logs")
+                    st.error(f"Error loading data: {str(e)}")
+                    st.info("Try selecting a different state/county or check the logs")
                     return
                 finally:
                     # Clear progress indicators
@@ -739,89 +813,94 @@ def main():
                     status_text.empty()
                 
                 if len(data) > 0:
-                    # Display statistics
+                    # Display statistics with professional styling
+                    st.markdown('<h3 class="section-header">Key Performance Metrics</h3>', unsafe_allow_html=True)
+                    
+                    # Create styled metric containers
                     col1, col2, col3, col4 = st.columns(4)
                     with col1:
                         avg_roi = data['ROI'].mean()
-                        st.metric("📈 Average ROI", f"{avg_roi:.2f}%", delta=f"{avg_roi - data['ROI'].median():.1f}%")
+                        st.markdown(f'<div class="metric-container"><strong>Average ROI</strong><br><span style="font-size: 1.5rem; color: #3b82f6;">{avg_roi:.2f}%</span></div>', unsafe_allow_html=True)
                     with col2:
                         median_value = data['Current_Value'].median()
-                        st.metric("🏠 Median Home Value", f"${median_value:,.0f}")
+                        st.markdown(f'<div class="metric-container"><strong>Median Home Value</strong><br><span style="font-size: 1.5rem; color: #3b82f6;">${median_value:,.0f}</span></div>', unsafe_allow_html=True)
                     with col3:
-                        st.metric("🏘️ Neighborhoods", len(data))
+                        st.markdown(f'<div class="metric-container"><strong>Neighborhoods</strong><br><span style="font-size: 1.5rem; color: #3b82f6;">{len(data)}</span></div>', unsafe_allow_html=True)
                     with col4:
                         coord_coverage = (data['Latitude'].notna().sum() / len(data)) * 100
-                        st.metric("📍 Coordinate Coverage", f"{coord_coverage:.0f}%")
+                        st.markdown(f'<div class="metric-container"><strong>Coordinate Coverage</strong><br><span style="font-size: 1.5rem; color: #3b82f6;">{coord_coverage:.0f}%</span></div>', unsafe_allow_html=True)
                     
                     # Check coordinate availability and show appropriate message
                     valid_coords = data['Latitude'].notna().sum()
                     if valid_coords == 0:
-                        st.error("❌ No coordinates available for visualization")
-                        st.info("🔧 This might be due to network restrictions. Try refreshing or contact support.")
+                        st.error("No coordinates available for visualization")
+                        st.info("This might be due to network restrictions. Try refreshing or contact support.")
                     elif valid_coords < len(data):
                         if not network_available:
-                            st.info(f"ℹ️ Using cached coordinates for {valid_coords} locations and generated fallback coordinates for the rest")
+                            st.info(f"Using cached coordinates for {valid_coords} locations and generated fallback coordinates for the rest")
                         else:
-                            st.warning(f"⚠️ Coordinates available for {valid_coords}/{len(data)} locations")
+                            st.warning(f"Coordinates available for {valid_coords}/{len(data)} locations")
                     
                     # Show coordinate source information
                     if valid_coords > 0:
-                        st.success(f"✅ Map displaying {valid_coords} neighborhoods")
+                        st.success(f"Map displaying {valid_coords} neighborhoods")
                         if valid_coords < len(data):
-                            st.info("📍 Some locations using fallback coordinates due to geocoding service limits")
+                            st.info("Some locations using fallback coordinates due to geocoding service limits")
                     
                     # Create and display the map
                     if valid_coords > 0:
+                        st.markdown('<h3 class="section-header">Geographic Visualization</h3>', unsafe_allow_html=True)
                         # Try to create the enhanced map first
-                        st.info("🗺️ Creating map visualization...")
+                        st.info("Creating map visualization...")
                         map_chart = create_3d_roi_map_optimized(data, use_satellite and network_available)
                         
                         # If enhanced map fails, try fallback map
                         if not map_chart:
-                            st.warning("⚠️ Enhanced map creation failed, using fallback visualization...")
+                            st.warning("Enhanced map creation failed, using fallback visualization...")
                             map_chart = create_robust_fallback_map(data)
                         
                         if map_chart:
-                            st.success("✅ Map created successfully!")
+                            st.success("Map created successfully!")
                             st.pydeck_chart(map_chart, use_container_width=True)
                             
-                            # Add legend
+                            # Add legend with professional styling
                             st.markdown("""
-                            **🎨 Color Legend:**
-                            - 🟡 **Light Yellow**: Lower ROI
-                            - 🟠 **Orange**: Medium ROI  
-                            - 🔴 **Deep Red**: Higher ROI
+                            **Color Legend:**
+                            - **Light Yellow**: Lower ROI
+                            - **Orange**: Medium ROI  
+                            - **Deep Red**: Higher ROI
                             """)
                         else:
-                            st.error("❌ Failed to create any map visualization")
-                            st.info("💡 This might be due to data format issues. Please check the logs.")
+                            st.error("Failed to create any map visualization")
+                            st.info("This might be due to data format issues. Please check the logs.")
                     
-                    # ROI Distribution
-                    st.subheader("📊 ROI Distribution")
+                    # ROI Distribution with professional styling
+                    st.markdown('<h3 class="section-header">ROI Performance Analysis</h3>', unsafe_allow_html=True)
                     col1, col2 = st.columns(2)
                     
                     with col1:
                         # Top performers
                         top_roi = data.nlargest(10, 'ROI')[['RegionName', 'ROI', 'Current_Value']]
-                        st.markdown("**🏆 Top ROI Performers**")
+                        st.markdown("**Top ROI Performers**")
                         st.dataframe(top_roi, use_container_width=True, hide_index=True)
                     
                     with col2:
                         # Bottom performers
                         bottom_roi = data.nsmallest(10, 'ROI')[['RegionName', 'ROI', 'Current_Value']]
-                        st.markdown("**📉 Lowest ROI Areas**")
+                        st.markdown("**Lowest ROI Areas**")
                         st.dataframe(bottom_roi, use_container_width=True, hide_index=True)
                     
                     # Add data table with enhanced search and pagination
-                    with st.expander("📋 View Complete Data Table"):
+                    with st.expander("View Complete Data Table"):
+                        st.markdown('<h3 class="section-header">Data Exploration & Filtering</h3>', unsafe_allow_html=True)
                         # Search and filter options
                         col1, col2, col3 = st.columns(3)
                         with col1:
-                            search_term = st.text_input("🔍 Search neighborhoods:", key="search_input")
+                            search_term = st.text_input("Search neighborhoods:", key="search_input")
                         with col2:
-                            min_roi = st.number_input("📈 Min ROI %:", value=float(data['ROI'].min()), key="min_roi")
+                            min_roi = st.number_input("Min ROI %:", value=float(data['ROI'].min()), key="min_roi")
                         with col3:
-                            max_roi = st.number_input("📈 Max ROI %:", value=float(data['ROI'].max()), key="max_roi")
+                            max_roi = st.number_input("Max ROI %:", value=float(data['ROI'].max()), key="max_roi")
                         
                         # Apply filters
                         filtered_data = data.copy()
@@ -830,16 +909,16 @@ def main():
                         filtered_data = filtered_data[(filtered_data['ROI'] >= min_roi) & (filtered_data['ROI'] <= max_roi)]
                         
                         # Sort options
-                        sort_by = st.selectbox("📊 Sort by:", ['ROI', 'Current_Value', 'RegionName'], key="sort_select")
-                        sort_order = st.radio("📈 Order:", ['Descending', 'Ascending'], key="sort_order", horizontal=True)
+                        sort_by = st.selectbox("Sort by:", ['ROI', 'Current_Value', 'RegionName'], key="sort_select")
+                        sort_order = st.radio("Order:", ['Descending', 'Ascending'], key="sort_order", horizontal=True)
                         ascending = sort_order == 'Ascending'
                         
                         filtered_data = filtered_data.sort_values(sort_by, ascending=ascending)
                         
                         # Pagination
-                        page_size = st.selectbox("📄 Items per page:", [25, 50, 100], index=1, key="page_size")
+                        page_size = st.selectbox("Items per page:", [25, 50, 100], index=1, key="page_size")
                         total_pages = max(1, (len(filtered_data) + page_size - 1) // page_size)
-                        page = st.selectbox("📖 Page:", range(1, total_pages + 1), key="page_select")
+                        page = st.selectbox("Page:", range(1, total_pages + 1), key="page_select")
                         
                         start_idx = (page - 1) * page_size
                         end_idx = start_idx + page_size
@@ -853,19 +932,19 @@ def main():
                         display_data.columns = ['Neighborhood', 'Current Value', 'ROI %', 'Initial Value']
                         
                         st.dataframe(display_data, use_container_width=True, hide_index=True)
-                        st.caption(f"📍 Showing {start_idx + 1}-{min(end_idx, len(filtered_data))} of {len(filtered_data)} neighborhoods")
+                        st.caption(f"Showing {start_idx + 1}-{min(end_idx, len(filtered_data))} of {len(filtered_data)} neighborhoods")
                         
                         # Download data option
                         csv_data = filtered_data.to_csv(index=False)
                         st.download_button(
-                            label="💾 Download filtered data as CSV",
+                            label="Download filtered data as CSV",
                             data=csv_data,
                             file_name=f"{selected_county}_{selected_state}_roi_data.csv",
                             mime="text/csv"
                         )
                 else:
-                    st.warning(f"❌ No data found for {selected_county}, {selected_state}")
-                    st.info("💡 Try selecting a different state and county combination")
+                    st.warning(f"No data found for {selected_county}, {selected_state}")
+                    st.info("Try selecting a different state and county combination")
 
 if __name__ == "__main__":
     main()
