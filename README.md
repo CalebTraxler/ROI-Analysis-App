@@ -1,19 +1,6 @@
 # Traxler ROI Analysis - Performance Optimized
 
-A high-performance 3D neighborhood ROI analysis application built with Streamlit and PyDeck, featuring advanced caching and parallel processing for lightning-fast loading times. This application analyzes real estate return on investment data across the United States with interactive 3D visualizations.
-
-## 🚀 Live Demo
-
-**Deployed on Streamlit Community Cloud**: [Coming Soon - Deploy to see live demo]
-
-## 🏗️ Features
-
-- **3D Interactive Maps**: PyDeck-powered 3D visualizations with heatmaps and scatter plots
-- **Real-time ROI Analysis**: Analyze 25+ years of real estate data across neighborhoods
-- **Advanced Caching**: Multi-layer caching system for lightning-fast performance
-- **Parallel Processing**: Concurrent geocoding and data processing
-- **Interactive Filters**: State, county, and neighborhood-level filtering
-- **Performance Monitoring**: Built-in performance metrics and optimization
+A high-performance 3D neighborhood ROI analysis application built with Streamlit and PyDeck, featuring advanced caching and parallel processing for lightning-fast loading times.
 
 ## 🚀 Performance Improvements
 
@@ -48,15 +35,21 @@ A high-performance 3D neighborhood ROI analysis application built with Streamlit
 - **Optimized Filtering**: State-county combinations pre-computed
 - **Memory Efficiency**: Reduced redundant data loading
 
+### 4. **User Experience Enhancements**
+- **Progress Indicators**: Real-time loading feedback
+- **Pagination**: Efficient data table display
+- **Search Functionality**: Fast neighborhood filtering
+- **Performance Metrics**: Built-in performance monitoring
+
 ## 📁 File Structure
 
 ```
 Traxler-ROI/
-├── ROI_optimized.py               # Main Streamlit application
+├── ROI.py                          # Original application
+├── ROI_optimized.py               # Performance-optimized version
+├── prepopulate_cache.py           # Cache pre-population script
 ├── config.py                      # Configuration management
-├── requirements.txt               # Python dependencies
-├── .streamlit/                    # Streamlit configuration
-│   └── config.toml              # Deployment settings
+├── requirements.txt               # Dependencies
 ├── README.md                      # This file
 ├── Neighborhood_zhvi_uc_sfrcondo_tier_0.33_0.67_sm_sa_month.csv  # Data file
 └── cache/                         # Cache directory (auto-created)
@@ -66,35 +59,27 @@ Traxler-ROI/
 
 ## 🚀 Quick Start
 
-### Local Development
+### 1. Install Dependencies
+```bash
+pip install -r requirements.txt
+```
 
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/CalebTraxler/Traxler-ROI.git
-   cd Traxler-ROI
-   ```
+### 2. Run the Optimized Application
+```bash
+streamlit run ROI_optimized.py
+```
 
-2. **Install dependencies**
-   ```bash
-   pip install -r requirements.txt
-   ```
+### 3. Pre-populate Cache (Optional but Recommended)
+```bash
+# Process all states and counties (takes time but dramatically improves performance)
+python prepopulate_cache.py
 
-3. **Run the application**
-   ```bash
-   streamlit run ROI_optimized.py
-   ```
+# Process specific states
+python prepopulate_cache.py --states "California,Texas"
 
-### Streamlit Community Cloud Deployment
-
-1. **Fork this repository** to your GitHub account
-
-2. **Sign up for Streamlit Community Cloud** at [share.streamlit.io](https://share.streamlit.io)
-
-3. **Connect your GitHub repository** in Streamlit Community Cloud
-
-4. **Deploy automatically** - Streamlit will detect the requirements.txt and deploy
-
-5. **Access your app** at the provided URL
+# Process specific counties
+python prepopulate_cache.py --counties "Los Angeles,Harris"
+```
 
 ## ⚙️ Configuration
 
@@ -128,7 +113,6 @@ The application includes built-in performance monitoring:
 ## 🔧 Advanced Usage
 
 ### Custom Geocoding Services
-
 Modify `config.py` to use different geocoding services:
 
 ```python
@@ -138,7 +122,6 @@ GOOGLE_API_KEY = "your_api_key_here"
 ```
 
 ### Cache Management
-
 The application automatically manages cache size and cleanup:
 
 ```python
@@ -148,19 +131,32 @@ MAX_CACHE_SIZE_MB = 100
 CACHE_CLEANUP_INTERVAL = 86400  # 24 hours
 ```
 
+### Performance Tuning
+Adjust performance parameters based on your needs:
+
+```python
+# Increase parallel workers for faster processing
+MAX_WORKERS = 10
+
+# Reduce rate limiting for faster geocoding
+RATE_LIMIT_PAUSE = 0.5
+
+# Increase batch size for larger datasets
+BATCH_SIZE = 20
+```
+
 ## 📈 Performance Benchmarks
 
 ### Test Results (Sample Dataset: 1,000 neighborhoods)
 
-| Metric       | Original | Optimized | Improvement |
-| ------------ | -------- | --------- | ----------- |
-| First Load   | 45.2s    | 8.1s      | 82%         |
-| Cached Load  | 45.2s    | 2.3s      | 95%         |
-| Memory Usage | 512MB    | 128MB     | 75%         |
-| CPU Usage    | 100%     | 25%       | 75%         |
+| Metric | Original | Optimized | Improvement |
+|--------|----------|-----------|-------------|
+| First Load | 45.2s | 8.1s | 82% |
+| Cached Load | 45.2s | 2.3s | 95% |
+| Memory Usage | 512MB | 128MB | 75% |
+| CPU Usage | 100% | 25% | 75% |
 
 ### Cache Effectiveness
-
 - **First Visit**: 0% cache hit rate
 - **Second Visit**: 95%+ cache hit rate
 - **Subsequent Visits**: 98%+ cache hit rate
@@ -170,9 +166,9 @@ CACHE_CLEANUP_INTERVAL = 86400  # 24 hours
 ### Common Issues
 
 1. **Slow First Load**
+   - Run `prepopulate_cache.py` to pre-populate coordinates
    - Check internet connection for geocoding service
    - Verify rate limiting settings
-   - Check Streamlit Community Cloud logs
 
 2. **Cache Not Working**
    - Check file permissions for cache directory
@@ -203,20 +199,17 @@ DEBUG_MODE=true streamlit run ROI_optimized.py
 ## 📚 Technical Details
 
 ### Caching Strategy
-
 - **L1 Cache**: Streamlit in-memory cache (fastest)
 - **L2 Cache**: Pickle files (fast)
 - **L3 Cache**: SQLite database (persistent)
 
 ### Geocoding Optimization
-
 - **Parallel Processing**: Multiple threads for concurrent requests
 - **Rate Limiting**: Respects service provider limits
 - **Retry Logic**: Exponential backoff for reliability
 - **Batch Processing**: Efficient handling of multiple locations
 
 ### Data Processing
-
 - **Lazy Loading**: Load data only when needed
 - **Incremental Updates**: Process only new/changed data
 - **Memory Mapping**: Efficient handling of large CSV files
@@ -224,14 +217,14 @@ DEBUG_MODE=true streamlit run ROI_optimized.py
 ## 🤝 Contributing
 
 1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+2. Create a feature branch
+3. Make your changes
+4. Add tests if applicable
+5. Submit a pull request
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License - see the LICENSE file for details.
 
 ## 🙏 Acknowledgments
 
@@ -239,20 +232,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **PyDeck**: For 3D map visualization capabilities
 - **Nominatim**: For free geocoding services
 - **Pandas**: For efficient data processing
-- **Streamlit Community Cloud**: For hosting and deployment
 
 ---
 
-**Note**: The first run of the application will be slower as it builds the initial cache. Subsequent runs will be significantly faster. For production deployments on Streamlit Community Cloud, the caching system will automatically optimize performance over time.
-
-## 📞 Support
-
-If you encounter any issues or have questions:
-
-1. Check the [Issues](https://github.com/CalebTraxler/Traxler-ROI/issues) page
-2. Create a new issue with detailed information
-3. Include your deployment environment and error logs
-
----
-
-**Happy ROI Analysis! 🏠📈**
+**Note**: The first run of the application will be slower as it builds the initial cache. Subsequent runs will be significantly faster. Consider running the cache pre-population script for production deployments.
