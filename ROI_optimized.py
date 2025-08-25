@@ -209,8 +209,9 @@ def load_area_data_optimized(state, county):
     return filtered_df
 
 # Additional caching for coordinates
-def get_cached_coordinates(cache_key):
+def get_cached_coordinates(state, county):
     """Get cached coordinates for a state-county combination"""
+    cache_key = f"{state}_{county}_coordinates"
     if PROCESSED_DATA_CACHE.exists():
         try:
             with open(PROCESSED_DATA_CACHE, 'rb') as f:
@@ -220,8 +221,9 @@ def get_cached_coordinates(cache_key):
             logger.warning(f"Failed to load coordinate cache: {e}")
     return None
 
-def cache_coordinates(cache_key, coordinates):
+def cache_coordinates(state, county, coordinates):
     """Cache coordinates for a state-county combination"""
+    cache_key = f"{state}_{county}_coordinates"
     try:
         cache_data = {}
         if PROCESSED_DATA_CACHE.exists():
