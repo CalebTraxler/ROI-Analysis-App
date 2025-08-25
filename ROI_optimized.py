@@ -271,9 +271,9 @@ def load_area_data_optimized(state, county, network_available=True):
     logger.info(f"Processed {len(filtered_df)} rows for {county}, {state} with {filtered_df['Latitude'].notna().sum()} valid coordinates")
     return filtered_df
 
-# Simple fallback map creation without external dependencies
-def create_simple_fallback_map(data):
-    """Create a simple map visualization without external map styles"""
+# Robust fallback map with OpenStreetMap background
+def create_robust_fallback_map(data):
+    """Create a map with guaranteed OpenStreetMap background"""
     if len(data) == 0:
         return None
     
@@ -304,14 +304,14 @@ def create_simple_fallback_map(data):
         bearing=0
     )
 
-    # Create simple scatter plot
+    # Create simple scatter plot with better visibility
     scatter_data = valid_data.copy()
     scatter_data['tooltip_text'] = scatter_data.apply(
         lambda row: f"{row['RegionName']}<br/>${row['Current_Value']:,.0f}<br/>ROI: {row['ROI']:.1f}%",
         axis=1
     )
     
-    # Color by ROI
+    # Color by ROI with better contrast
     min_roi = scatter_data['ROI'].min()
     max_roi = scatter_data['ROI'].max()
     
@@ -321,47 +321,102 @@ def create_simple_fallback_map(data):
         else:
             normalized = (roi - min_roi) / (max_roi - min_roi)
         
-        # Red to Green gradient
+        # Red to Green gradient with better visibility
         if normalized < 0.5:
-            return [255, int(255 * normalized * 2), 0, 200]
+            # Red to Yellow
+            return [255, int(255 * normalized * 2), 0, 220]
         else:
-            return [int(255 * (1 - (normalized - 0.5) * 2)), 255, 0, 200]
+            # Yellow to Green
+            return [int(255 * (1 - (normalized - 0.5) * 2)), 255, 0, 220]
     
     scatter_data['color'] = scatter_data['ROI'].apply(get_color_by_roi)
     
-    # Create simple scatter layer
+    # Create scatter layer with better visibility
     scatter_layer = pdk.Layer(
         'ScatterplotLayer',
         scatter_data,
         get_position=['Longitude', 'Latitude'],
-        get_radius=100,
+        get_radius=150,
         get_fill_color='color',
-        get_line_color=[255, 255, 255, 150],
+        get_line_color=[255, 255, 255, 200],
         pickable=True,
-        opacity=0.8,
+        opacity=0.9,
         stroked=True,
         filled=True,
-        line_width_min_pixels=2,
+        line_width_min_pixels=3,
         radius_scale=1
     )
     
-    # Create deck without map style
-    deck = pdk.Deck(
-        layers=[scatter_layer],
-        initial_view_state=view_state,
-        tooltip={
-            "html": "<b>{tooltip_text}</b>",
-            "style": {
-                "backgroundColor": "rgba(0, 0, 0, 0.8)",
-                "color": "white",
-                "padding": "10px",
-                "borderRadius": "5px"
-            }
-        },
-        height=600
+    # Create coordinate grid lines for better orientation
+    grid_data = []
+    lat_min, lat_max = valid_data['Latitude'].min(), valid_data['Latitude'].max()
+    lon_min, lon_max = valid_data['Longitude'].min(), valid_data['Longitude'].max()
+    
+    # Add latitude lines
+    for lat in np.linspace(lat_min, lat_max, 5):
+        grid_data.append({
+            'path': [[lon_min, lat], [lon_max, lat]],
+            'type': 'lat'
+        })
+    
+    # Add longitude lines
+    for lon in np.linspace(lon_min, lon_max, 5):
+        grid_data.append({
+            'path': [[lon, lat_min], [lon, lat_max]],
+            'type': 'lon'
+        })
+    
+    # Create grid layer
+    grid_layer = pdk.Layer(
+        'PathLayer',
+        grid_data,
+        get_path='path',
+        get_color='[200, 200, 200, 100]',
+        get_width=1,
+        pickable=False
     )
     
-    return deck
+    # Try to create deck with OpenStreetMap style
+    try:
+        deck = pdk.Deck(
+            layers=[grid_layer, scatter_layer],
+            initial_view_state=view_state,
+            map_style='https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',
+            tooltip={
+                "html": "<b>{tooltip_text}</b>",
+                "style": {
+                    "backgroundColor": "rgba(0, 0, 0, 0.8)",
+                    "color": "white",
+                    "padding": "10px",
+                    "borderRadius": "5px"
+                }
+            },
+            height=600
+        )
+        return deck
+    except Exception as e:
+        logger.warning(f"Failed to create map with CartoDB style: {e}")
+        
+        # Final fallback: no map style but with coordinate grid
+        try:
+            deck = pdk.Deck(
+                layers=[grid_layer, scatter_layer],
+                initial_view_state=view_state,
+                tooltip={
+                    "html": "<b>{tooltip_text}</b>",
+                    "style": {
+                        "backgroundColor": "rgba(0, 0, 0, 0.8)",
+                        "color": "white",
+                        "padding": "10px",
+                        "borderRadius": "5px"
+                    }
+                },
+                height=600
+            )
+            return deck
+        except Exception as e2:
+            logger.error(f"Failed to create any map: {e2}")
+            return None
 
 # Enhanced 3D map creation with guaranteed background display
 def create_3d_roi_map_optimized(data, use_satellite=False):
@@ -468,6 +523,8 @@ def create_3d_roi_map_optimized(data, use_satellite=False):
         'mapbox://styles/mapbox/light-v9',      # Light style (most reliable)
         'mapbox://styles/mapbox/streets-v11',   # Streets style
         'mapbox://styles/mapbox/outdoors-v11',  # Outdoors style
+        'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',  # CartoDB light
+        'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',  # CartoDB dark
         None  # No style (just layers)
     ]
     
@@ -653,7 +710,7 @@ def main():
                         # If enhanced map fails, try fallback map
                         if not map_chart:
                             st.info("🔄 Enhanced map creation failed, using fallback visualization...")
-                            map_chart = create_simple_fallback_map(data)
+                            map_chart = create_robust_fallback_map(data)
                         
                         if map_chart:
                             st.pydeck_chart(map_chart, use_container_width=True)
