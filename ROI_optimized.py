@@ -156,23 +156,24 @@ def batch_geocode_with_fallback(locations, state, county, network_available=True
         logger.info(f"All {len(cached_locations)} locations found in cache")
         return cached_locations
     
-    # If network is not available, generate fallback coordinates
-    if not network_available:
-        logger.info(f"Network unavailable, generating fallback coordinates for {len(uncached_locations)} locations")
+    # If network is not available or we have too many uncached locations, generate fallback coordinates
+    if not network_available or len(uncached_locations) > 5:
+        logger.info(f"Network unavailable or too many locations ({len(uncached_locations)}), generating fallback coordinates")
         fallback_coords = generate_fallback_coordinates(uncached_locations, state, county)
         results.update(fallback_coords)
         results.update(cached_locations)
         return results
     
-    # Try geocoding for uncached locations
-    logger.info(f"Found {len(cached_locations)} cached locations, attempting to geocode {len(uncached_locations)} new locations")
+    # Try geocoding for uncached locations (limited to 5 to avoid rate limiting)
+    logger.info(f"Found {len(cached_locations)} cached locations, attempting to geocode {min(len(uncached_locations), 5)} new locations")
     
     geolocator = Nominatim(user_agent="roi_analysis_app_v3", timeout=15)
     geocoded_count = 0
     
-    for loc in uncached_locations[:10]:  # Limit to 10 requests to avoid rate limiting
+    # Limit to 5 requests to avoid rate limiting
+    for loc in uncached_locations[:5]:
         try:
-            time.sleep(1)  # Rate limiting
+            time.sleep(2)  # Increased rate limiting delay
             location = geolocator.geocode(f"{loc}, {county} County, {state}, USA")
             if location:
                 results[loc] = (location.latitude, location.longitude)
@@ -270,9 +271,101 @@ def load_area_data_optimized(state, county, network_available=True):
     logger.info(f"Processed {len(filtered_df)} rows for {county}, {state} with {filtered_df['Latitude'].notna().sum()} valid coordinates")
     return filtered_df
 
-# Enhanced 3D map creation with better map styles
+# Simple fallback map creation without external dependencies
+def create_simple_fallback_map(data):
+    """Create a simple map visualization without external map styles"""
+    if len(data) == 0:
+        return None
+    
+    # Filter out rows with missing coordinates
+    valid_data = data.dropna(subset=['Latitude', 'Longitude'])
+    if len(valid_data) == 0:
+        return None
+    
+    # Calculate view state
+    center_lat = valid_data['Latitude'].mean()
+    center_lon = valid_data['Longitude'].mean()
+    
+    # Calculate zoom level
+    lat_range = valid_data['Latitude'].max() - valid_data['Latitude'].min()
+    lon_range = valid_data['Longitude'].max() - valid_data['Longitude'].min()
+    max_range = max(lat_range, lon_range)
+    
+    if max_range > 0:
+        zoom = max(8, min(15, 20 / max_range))
+    else:
+        zoom = 10
+    
+    view_state = pdk.ViewState(
+        latitude=center_lat,
+        longitude=center_lon,
+        zoom=zoom,
+        pitch=0,
+        bearing=0
+    )
+
+    # Create simple scatter plot
+    scatter_data = valid_data.copy()
+    scatter_data['tooltip_text'] = scatter_data.apply(
+        lambda row: f"{row['RegionName']}<br/>${row['Current_Value']:,.0f}<br/>ROI: {row['ROI']:.1f}%",
+        axis=1
+    )
+    
+    # Color by ROI
+    min_roi = scatter_data['ROI'].min()
+    max_roi = scatter_data['ROI'].max()
+    
+    def get_color_by_roi(roi):
+        if max_roi == min_roi:
+            normalized = 0.5
+        else:
+            normalized = (roi - min_roi) / (max_roi - min_roi)
+        
+        # Red to Green gradient
+        if normalized < 0.5:
+            return [255, int(255 * normalized * 2), 0, 200]
+        else:
+            return [int(255 * (1 - (normalized - 0.5) * 2)), 255, 0, 200]
+    
+    scatter_data['color'] = scatter_data['ROI'].apply(get_color_by_roi)
+    
+    # Create simple scatter layer
+    scatter_layer = pdk.Layer(
+        'ScatterplotLayer',
+        scatter_data,
+        get_position=['Longitude', 'Latitude'],
+        get_radius=100,
+        get_fill_color='color',
+        get_line_color=[255, 255, 255, 150],
+        pickable=True,
+        opacity=0.8,
+        stroked=True,
+        filled=True,
+        line_width_min_pixels=2,
+        radius_scale=1
+    )
+    
+    # Create deck without map style
+    deck = pdk.Deck(
+        layers=[scatter_layer],
+        initial_view_state=view_state,
+        tooltip={
+            "html": "<b>{tooltip_text}</b>",
+            "style": {
+                "backgroundColor": "rgba(0, 0, 0, 0.8)",
+                "color": "white",
+                "padding": "10px",
+                "borderRadius": "5px"
+            }
+        },
+        height=600
+    )
+    
+    return deck
+
+# Enhanced 3D map creation with guaranteed background display
 def create_3d_roi_map_optimized(data, use_satellite=False):
-    """Enhanced map creation with better fallback options and styling"""
+    """Enhanced map creation with guaranteed background display"""
     if len(data) == 0:
         return None
     
@@ -335,14 +428,7 @@ def create_3d_roi_map_optimized(data, use_satellite=False):
     roi_normalized = (scatter_data['ROI'] - scatter_data['ROI'].min()) / (scatter_data['ROI'].max() - scatter_data['ROI'].min())
     scatter_data['heatmap_weight'] = roi_normalized + 0.1  # Ensure minimum weight
     
-    # Choose map style based on availability
-    map_styles = [
-        'mapbox://styles/mapbox/satellite-streets-v11' if use_satellite else 'mapbox://styles/mapbox/dark-v10',
-        'mapbox://styles/mapbox/streets-v11',
-        'mapbox://styles/mapbox/light-v10',
-        None  # No map style (just layers)
-    ]
-    
+    # Create layers
     layers = [
         pdk.Layer(
             'HeatmapLayer',
@@ -377,7 +463,14 @@ def create_3d_roi_map_optimized(data, use_satellite=False):
         )
     ]
 
-    # Try different map styles until one works
+    # Try multiple map styles to ensure one works
+    map_styles = [
+        'mapbox://styles/mapbox/light-v9',      # Light style (most reliable)
+        'mapbox://styles/mapbox/streets-v11',   # Streets style
+        'mapbox://styles/mapbox/outdoors-v11',  # Outdoors style
+        None  # No style (just layers)
+    ]
+    
     for map_style in map_styles:
         try:
             deck = pdk.Deck(
@@ -546,9 +639,22 @@ def main():
                         else:
                             st.warning(f"⚠️ Coordinates available for {valid_coords}/{len(data)} locations")
                     
+                    # Show coordinate source information
+                    if valid_coords > 0:
+                        st.success(f"✅ Map displaying {valid_coords} neighborhoods")
+                        if valid_coords < len(data):
+                            st.info("📍 Some locations using fallback coordinates due to geocoding service limits")
+                    
                     # Create and display the map
                     if valid_coords > 0:
+                        # Try to create the enhanced map first
                         map_chart = create_3d_roi_map_optimized(data, use_satellite and network_available)
+                        
+                        # If enhanced map fails, try fallback map
+                        if not map_chart:
+                            st.info("🔄 Enhanced map creation failed, using fallback visualization...")
+                            map_chart = create_simple_fallback_map(data)
+                        
                         if map_chart:
                             st.pydeck_chart(map_chart, use_container_width=True)
                             
@@ -560,7 +666,8 @@ def main():
                             - 🟢 **Green**: Higher ROI
                             """)
                         else:
-                            st.error("❌ Failed to create map visualization")
+                            st.error("❌ Failed to create any map visualization")
+                            st.info("💡 This might be due to data format issues. Please check the logs.")
                     
                     # ROI Distribution
                     st.subheader("📊 ROI Distribution")
