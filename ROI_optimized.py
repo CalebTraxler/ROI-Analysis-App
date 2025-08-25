@@ -235,6 +235,33 @@ def cache_coordinates(cache_key, coordinates):
     except Exception as e:
         logger.warning(f"Failed to save coordinate cache: {e}")
 
+# Add missing caching functions
+def load_from_cache(cache_key):
+    """Load processed data from cache"""
+    if PROCESSED_DATA_CACHE.exists():
+        try:
+            with open(PROCESSED_DATA_CACHE, 'rb') as f:
+                cache_data = pickle.load(f)
+                return cache_data.get(cache_key)
+        except Exception as e:
+            logger.warning(f"Failed to load processed data cache: {e}")
+    return None
+
+def cache_processed_data(cache_key, data):
+    """Cache processed data"""
+    try:
+        cache_data = {}
+        if PROCESSED_DATA_CACHE.exists():
+            with open(PROCESSED_DATA_CACHE, 'rb') as f:
+                cache_data = pickle.load(f)
+        
+        cache_data[cache_key] = data
+        
+        with open(PROCESSED_DATA_CACHE, 'wb') as f:
+            pickle.dump(cache_data, f)
+    except Exception as e:
+        logger.warning(f"Failed to save processed data cache: {e}")
+
 # Optimized 3D map creation
 def create_3d_roi_map_optimized(data):
     """Optimized version of create_3d_roi_map"""
