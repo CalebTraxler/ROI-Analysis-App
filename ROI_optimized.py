@@ -731,22 +731,6 @@ def main():
     network_status = check_network_status()
     network_available = any(network_status.values())
     
-    # Network status indicator with professional styling
-    st.sidebar.markdown("### Network Status")
-    
-    if network_status.get('geocoding', False):
-        st.sidebar.success("Geocoding service accessible")
-    else:
-        st.sidebar.warning("Geocoding service unavailable")
-    
-    if network_status.get('general', False):
-        st.sidebar.success("Internet connection active")
-    else:
-        st.sidebar.error("Limited internet access")
-    
-    if not network_available:
-        st.sidebar.info("Using cached data and fallback coordinates")
-    
     # Performance optimization: Load states and counties once
     @st.cache_data(ttl=3600)
     def get_states_and_counties():
@@ -775,9 +759,6 @@ def main():
         # Map style options
         st.sidebar.markdown("### Visualization Options")
         use_satellite = st.sidebar.checkbox("Satellite view", help="Use satellite imagery as base map (requires network)")
-        
-        # Performance metrics
-        st.sidebar.markdown("### Performance Information")
         
         # Progress indicator with professional UX
         if selected_state and selected_county:            
@@ -830,37 +811,18 @@ def main():
                         coord_coverage = (data['Latitude'].notna().sum() / len(data)) * 100
                         st.markdown(f'<div class="metric-container"><strong>Coordinate Coverage</strong><br><span style="font-size: 1.5rem; color: #3b82f6;">{coord_coverage:.0f}%</span></div>', unsafe_allow_html=True)
                     
-                    # Check coordinate availability and show appropriate message
-                    valid_coords = data['Latitude'].notna().sum()
-                    if valid_coords == 0:
-                        st.error("No coordinates available for visualization")
-                        st.info("This might be due to network restrictions. Try refreshing or contact support.")
-                    elif valid_coords < len(data):
-                        if not network_available:
-                            st.info(f"Using cached coordinates for {valid_coords} locations and generated fallback coordinates for the rest")
-                        else:
-                            st.warning(f"Coordinates available for {valid_coords}/{len(data)} locations")
-                    
-                    # Show coordinate source information
-                    if valid_coords > 0:
-                        st.success(f"Map displaying {valid_coords} neighborhoods")
-                        if valid_coords < len(data):
-                            st.info("Some locations using fallback coordinates due to geocoding service limits")
-                    
                     # Create and display the map
+                    valid_coords = data['Latitude'].notna().sum()
                     if valid_coords > 0:
                         st.markdown('<h3 class="section-header">Geographic Visualization</h3>', unsafe_allow_html=True)
                         # Try to create the enhanced map first
-                        st.info("Creating map visualization...")
                         map_chart = create_3d_roi_map_optimized(data, use_satellite and network_available)
                         
                         # If enhanced map fails, try fallback map
                         if not map_chart:
-                            st.warning("Enhanced map creation failed, using fallback visualization...")
                             map_chart = create_robust_fallback_map(data)
                         
                         if map_chart:
-                            st.success("Map created successfully!")
                             st.pydeck_chart(map_chart, use_container_width=True)
                             
                             # Add legend with professional styling
@@ -870,9 +832,6 @@ def main():
                             - **Orange**: Medium ROI  
                             - **Deep Red**: Higher ROI
                             """)
-                        else:
-                            st.error("Failed to create any map visualization")
-                            st.info("This might be due to data format issues. Please check the logs.")
                     
                     # ROI Distribution with professional styling
                     st.markdown('<h3 class="section-header">ROI Performance Analysis</h3>', unsafe_allow_html=True)
