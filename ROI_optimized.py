@@ -470,7 +470,7 @@ def create_3d_roi_map_optimized(data, use_satellite=False):
         latitude=center_lat,
         longitude=center_lon,
         zoom=zoom,
-        pitch=45,
+        pitch=0,  # Changed to 0 for better compatibility
         bearing=0
     )
 
@@ -539,57 +539,104 @@ def create_3d_roi_map_optimized(data, use_satellite=False):
         )
     ]
 
-    # Try multiple map styles to ensure one works
-    map_styles = [
-        'mapbox://styles/mapbox/light-v9',      # Light style (most reliable)
-        'mapbox://styles/mapbox/streets-v11',   # Streets style
-        'mapbox://styles/mapbox/outdoors-v11',  # Outdoors style
-        'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',  # CartoDB light
-        'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',  # CartoDB dark
-        None  # No style (just layers)
-    ]
-    
-    for map_style in map_styles:
-        try:
-            deck = pdk.Deck(
-                layers=layers,
-                initial_view_state=view_state,
-                map_style=map_style,
-                tooltip={
-                    "html": "<b>{tooltip_text}</b>",
-                    "style": {
-                        "backgroundColor": "rgba(0, 0, 0, 0.8)",
-                        "color": "white",
-                        "padding": "10px",
-                        "borderRadius": "5px",
-                        "fontSize": "12px"
-                    }
-                },
-                height=600
-            )
-            return deck
-        except Exception as e:
-            logger.warning(f"Failed to create map with style {map_style}: {e}")
-            continue
-    
-    # If all map styles fail, create a simple layer-only visualization
-    logger.info("Creating fallback visualization without base map")
-    deck = pdk.Deck(
-        layers=layers,
-        initial_view_state=view_state,
-        tooltip={
-            "html": "<b>{tooltip_text}</b>",
-            "style": {
-                "backgroundColor": "rgba(0, 0, 0, 0.8)",
-                "color": "white",
-                "padding": "10px",
-                "borderRadius": "5px"
-            }
-        },
-        height=600
-    )
-    
-    return deck
+    # FORCE OpenStreetMap tiles - this should work on Streamlit Cloud
+    try:
+        # Create a custom map style that forces OpenStreetMap tiles
+        custom_map_style = {
+            "version": 8,
+            "sources": {
+                "osm": {
+                    "type": "raster",
+                    "tiles": ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
+                    "tileSize": 256,
+                    "attribution": "© OpenStreetMap contributors"
+                }
+            },
+            "layers": [
+                {
+                    "id": "osm-tiles",
+                    "type": "raster",
+                    "source": "osm",
+                    "minzoom": 0,
+                    "maxzoom": 18
+                }
+            ]
+        }
+        
+        deck = pdk.Deck(
+            layers=layers,
+            initial_view_state=view_state,
+            map_style=custom_map_style,
+            tooltip={
+                "html": "<b>{tooltip_text}</b>",
+                "style": {
+                    "backgroundColor": "rgba(0, 0, 0, 0.8)",
+                    "color": "white",
+                    "padding": "10px",
+                    "borderRadius": "5px",
+                    "fontSize": "12px"
+                }
+            },
+            height=600
+        )
+        logger.info("Successfully created map with custom OpenStreetMap tiles")
+        return deck
+        
+    except Exception as e:
+        logger.warning(f"Custom OpenStreetMap tiles failed: {e}")
+        
+        # Try multiple map styles to ensure one works
+        map_styles = [
+            'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',  # CartoDB light (most reliable)
+            'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',  # CartoDB dark
+            'mapbox://styles/mapbox/light-v9',      # Light style
+            'mapbox://styles/mapbox/streets-v11',   # Streets style
+            'mapbox://styles/mapbox/outdoors-v11',  # Outdoors style
+            None  # No style (just layers)
+        ]
+        
+        for map_style in map_styles:
+            try:
+                deck = pdk.Deck(
+                    layers=layers,
+                    initial_view_state=view_state,
+                    map_style=map_style,
+                    tooltip={
+                        "html": "<b>{tooltip_text}</b>",
+                        "style": {
+                            "backgroundColor": "rgba(0, 0, 0, 0.8)",
+                            "color": "white",
+                            "padding": "10px",
+                            "borderRadius": "5px",
+                            "fontSize": "12px"
+                        }
+                    },
+                    height=600
+                )
+                logger.info(f"Successfully created map with style: {map_style}")
+                return deck
+            except Exception as e:
+                logger.warning(f"Failed to create map with style {map_style}: {e}")
+                continue
+        
+        # If all map styles fail, create a simple layer-only visualization
+        logger.info("Creating fallback visualization without base map")
+        deck = pdk.Deck(
+            layers=layers,
+            initial_view_state=view_state,
+            tooltip={
+                "html": "<b>{tooltip_text}</b>",
+                "style": {
+                    "backgroundColor": "rgba(0, 0, 0, 0.8)",
+                    "color": "white",
+                    "padding": "10px",
+                    "borderRadius": "5px"
+                }
+            },
+            height=600
+        )
+        
+        return deck
 
 # Main app section with performance optimizations
 def main():
@@ -726,14 +773,16 @@ def main():
                     # Create and display the map
                     if valid_coords > 0:
                         # Try to create the enhanced map first
+                        st.info("🗺️ Creating map visualization...")
                         map_chart = create_3d_roi_map_optimized(data, use_satellite and network_available)
                         
                         # If enhanced map fails, try fallback map
                         if not map_chart:
-                            st.info("🔄 Enhanced map creation failed, using fallback visualization...")
+                            st.warning("⚠️ Enhanced map creation failed, using fallback visualization...")
                             map_chart = create_robust_fallback_map(data)
                         
                         if map_chart:
+                            st.success("✅ Map created successfully!")
                             st.pydeck_chart(map_chart, use_container_width=True)
                             
                             # Add legend
