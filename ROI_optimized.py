@@ -87,7 +87,8 @@ def batch_geocode_parallel(locations, state, county, max_workers=5):
         
         for attempt in range(max_retries):
             try:
-                location = geolocator.geocode(f"{loc}, {county} County, {state}, USA", timeout=15)
+                # Add longer timeout and better error handling for Streamlit Cloud
+                location = geolocator.geocode(f"{loc}, {county} County, {state}, USA", timeout=30)
                 if location:
                     save_location_to_cache(location_key, location.latitude, location.longitude, state, county)
                     return loc, (location.latitude, location.longitude)
@@ -103,21 +104,21 @@ def batch_geocode_parallel(locations, state, county, max_workers=5):
         
         return loc, (None, None)
     
-    # Process uncached locations in parallel with rate limiting
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        # Submit all tasks
+    # Use fewer workers and longer delays for Streamlit Cloud compatibility
+    with ThreadPoolExecutor(max_workers=2) as executor:
         future_to_loc = {executor.submit(geocode_single, loc): loc for loc in uncached_locations}
         
-        # Process completed tasks with rate limiting
-        completed = 0
         for future in as_completed(future_to_loc):
-            loc, coords = future.result()
-            results[loc] = coords
-            completed += 1
-            
-            # Rate limiting: pause every 10 requests
-            if completed % 10 == 0:
-                time.sleep(1)
+            loc = future_to_loc[future]
+            try:
+                result = future.result()
+                if result:
+                    results[result[0]] = result[1]
+                # Add longer delay between requests for Streamlit Cloud
+                time.sleep(2)
+            except Exception as e:
+                logger.error(f"Exception occurred while geocoding {loc}: {e}")
+                results[loc] = (None, None)
     
     # Combine cached and new results
     results.update(cached_locations)
@@ -150,42 +151,62 @@ def preprocess_main_dataset():
 # Optimized data loading with better caching
 @st.cache_data(ttl=3600)  # Cache for 1 hour
 def load_area_data_optimized(state, county):
-    """Optimized version of load_area_data with better caching"""
-    # Initialize the cache database if it doesn't exist
-    setup_coordinates_cache()
+    """Optimized data loading with enhanced caching and fallback mechanisms"""
+    cache_key = f"{state}_{county}_data"
     
-    # Get preprocessed data
+    # Try to load from cache first
+    cached_data = load_from_cache(cache_key)
+    if cached_data is not None:
+        logger.info(f"Loaded {len(cached_data)} rows from cache for {county}, {state}")
+        return cached_data
+    
+    logger.info(f"Loading and preprocessing data for {county}, {state}")
+    
+    # Load the main dataset
     df = preprocess_main_dataset()
     
-    # Filter data
-    if state:
-        df = df[df['State'] == state]
-    if county:
-        df = df[df['CountyName'] == county]
-        
-        # Only geocode if we have data and no coordinates
-        if len(df) > 0:
-            # Check if we already have coordinates for this state-county combination
-            cache_key = f"{state}_{county}_coordinates"
-            cached_coords = get_cached_coordinates(cache_key)
-            
-            if cached_coords is None:
-                # Batch geocode all locations
-                unique_locations = df['RegionName'].unique()
-                logger.info(f"Geocoding {len(unique_locations)} locations for {county}, {state}")
-                
-                coordinates = batch_geocode_parallel(unique_locations, state, county)
-                
-                # Cache the coordinates for this state-county combination
-                cache_coordinates(cache_key, coordinates)
-            else:
-                coordinates = cached_coords
-            
-            # Add coordinates to dataframe
-            df['Latitude'] = df['RegionName'].map(lambda x: coordinates.get(x, (None, None))[0])
-            df['Longitude'] = df['RegionName'].map(lambda x: coordinates.get(x, (None, None))[1])
+    # Filter by state and county
+    filtered_df = df[(df['State'] == state) & (df['CountyName'] == county)].copy()
     
-    return df.dropna(subset=['Current_Value', 'ROI', 'Latitude', 'Longitude'])
+    if len(filtered_df) == 0:
+        logger.warning(f"No data found for {county}, {state}")
+        return pd.DataFrame()
+    
+    # Try to get coordinates from cache first
+    coordinates = get_cached_coordinates(state, county)
+    
+    if coordinates is None or len(coordinates) == 0:
+        # If no cached coordinates, try to geocode
+        try:
+            logger.info(f"Geocoding {len(filtered_df)} locations for {county}, {state}")
+            coordinates = batch_geocode_parallel(filtered_df['RegionName'].unique(), state, county)
+        except Exception as e:
+            logger.error(f"Geocoding failed for {county}, {state}: {e}")
+            # Fallback: use default coordinates or skip geocoding
+            coordinates = {}
+    
+    # Add coordinates to dataframe
+    filtered_df['Latitude'] = filtered_df['RegionName'].map(lambda x: coordinates.get(x, (None, None))[0] if coordinates.get(x) else None)
+    filtered_df['Longitude'] = filtered_df['RegionName'].map(lambda x: coordinates.get(x, (None, None))[1] if coordinates.get(x) else None)
+    
+    # Calculate ROI and current values
+    date_cols = [col for col in filtered_df.columns if len(col) == 10 and '-' in col]
+    if len(date_cols) >= 2:
+        date_cols.sort()
+        first_date = date_cols[0]
+        last_date = date_cols[-1]
+        
+        filtered_df['First_Value'] = pd.to_numeric(filtered_df[first_date], errors='coerce')
+        filtered_df['Current_Value'] = pd.to_numeric(filtered_df[last_date], errors='coerce')
+        
+        # Calculate ROI
+        filtered_df['ROI'] = ((filtered_df['Current_Value'] - filtered_df['First_Value']) / filtered_df['First_Value'] * 100).fillna(0)
+    
+    # Cache the processed data
+    cache_processed_data(cache_key, filtered_df)
+    
+    logger.info(f"Processed {len(filtered_df)} rows for {county}, {state}")
+    return filtered_df
 
 # Additional caching for coordinates
 def get_cached_coordinates(cache_key):
@@ -220,18 +241,36 @@ def create_3d_roi_map_optimized(data):
     if len(data) == 0:
         return None
     
-    # Calculate view state
+    # Filter out rows with missing coordinates
+    valid_data = data.dropna(subset=['Latitude', 'Longitude'])
+    if len(valid_data) == 0:
+        st.warning("No valid coordinates found for visualization")
+        return None
+    
+    # Calculate view state with better defaults
+    center_lat = valid_data['Latitude'].mean()
+    center_lon = valid_data['Longitude'].mean()
+    
+    # Calculate appropriate zoom level
+    lat_range = valid_data['Latitude'].max() - valid_data['Latitude'].min()
+    lon_range = valid_data['Longitude'].max() - valid_data['Longitude'].min()
+    max_range = max(lat_range, lon_range)
+    
+    if max_range > 0:
+        zoom = max(8, min(15, 20 / max_range))
+    else:
+        zoom = 10
+    
     view_state = pdk.ViewState(
-        latitude=data['Latitude'].mean(),
-        longitude=data['Longitude'].mean(),
-        zoom=min(20 / max(data['Latitude'].max() - data['Latitude'].min(), 
-                         data['Longitude'].max() - data['Longitude'].min()), 12),
+        latitude=center_lat,
+        longitude=center_lon,
+        zoom=zoom,
         pitch=45,
         bearing=0
     )
 
     # Format the data and create color scale based on ROI
-    scatter_data = data.copy()
+    scatter_data = valid_data.copy()
     scatter_data['tooltip_text'] = scatter_data.apply(
         lambda row: f"{row['RegionName']}<br/>${row['Current_Value']:,.2f}<br/>ROI: {row['ROI']:.2f}%",
         axis=1
@@ -259,49 +298,52 @@ def create_3d_roi_map_optimized(data):
     # Create heatmap layer with exponential weighting for ROI
     scatter_data['weighted_roi'] = np.exp(scatter_data['ROI'] / 50) - 1  # Exponential scaling
     
-    heatmap_layer = pdk.Layer(
-        'HeatmapLayer',
-        scatter_data,
-        get_position=['Longitude', 'Latitude'],
-        get_weight='weighted_roi',
-        radiusPixels=60,
-        intensity=2,
-        threshold=0.02,
-        colorRange=[
-            [255, 255, 178, 100],  # Light yellow
-            [254, 204, 92, 150],   # Yellow
-            [253, 141, 60, 200],   # Orange
-            [240, 59, 32, 250],    # Red-Orange
-            [189, 0, 38, 255]      # Deep Red
-        ],
-        pickable=False
-    )
-
-    # Create scatter layer for tooltips
-    scatter_layer = pdk.Layer(
-        'ScatterplotLayer',
-        scatter_data,
-        get_position=['Longitude', 'Latitude'],
-        get_radius=30,
-        get_fill_color='color',
-        pickable=True,
-        opacity=0.8,
-        stroked=True,
-        filled=True
-    )
-
-    # Create the deck with tooltip configuration
+    # Create the deck with improved configuration
     deck = pdk.Deck(
-        layers=[heatmap_layer, scatter_layer],
+        layers=[
+            pdk.Layer(
+                'HeatmapLayer',
+                scatter_data,
+                get_position=['Longitude', 'Latitude'],
+                get_weight='weighted_roi',
+                radiusPixels=80,
+                intensity=1.5,
+                threshold=0.01,
+                colorRange=[
+                    [255, 255, 178, 100],  # Light yellow
+                    [254, 204, 92, 150],   # Yellow
+                    [253, 141, 60, 200],   # Orange
+                    [240, 59, 32, 250],    # Red-Orange
+                    [189, 0, 38, 255]      # Deep Red
+                ],
+                pickable=False
+            ),
+            pdk.Layer(
+                'ScatterplotLayer',
+                scatter_data,
+                get_position=['Longitude', 'Latitude'],
+                get_radius=40,
+                get_fill_color='color',
+                get_line_color=[255, 255, 255, 100],
+                pickable=True,
+                opacity=0.9,
+                stroked=True,
+                filled=True,
+                line_width_min_pixels=1
+            )
+        ],
         initial_view_state=view_state,
         map_style='mapbox://styles/mapbox/dark-v10',
         tooltip={
             "html": "<b>{tooltip_text}</b>",
             "style": {
                 "backgroundColor": "steelblue",
-                "color": "white"
+                "color": "white",
+                "padding": "10px",
+                "borderRadius": "5px"
             }
-        }
+        },
+        height=600
     )
 
     return deck
@@ -317,6 +359,25 @@ def main():
     - Color intensity indicates higher ROI values
     - Hover over points to see detailed information
     """)
+    
+    # Network status indicator
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("**Network Status**")
+    
+    # Check if we can reach external services
+    try:
+        import requests
+        response = requests.get("https://nominatim.openstreetmap.org", timeout=5)
+        if response.status_code == 200:
+            st.sidebar.success("✅ External services accessible")
+            network_available = True
+        else:
+            st.sidebar.warning("⚠️ Limited external access")
+            network_available = False
+    except:
+        st.sidebar.error("❌ No external network access")
+        st.sidebar.info("Using cached coordinates only")
+        network_available = False
     
     # Performance optimization: Load states and counties once
     @st.cache_data(ttl=3600)
@@ -361,10 +422,14 @@ def main():
                 status_text.text("Generating visualization...")
                 progress_bar.progress(75)
                 
-                data = load_area_data_optimized(selected_state, selected_county)
-                
-                progress_bar.progress(100)
-                status_text.text("Complete!")
+                try:
+                    data = load_area_data_optimized(selected_state, selected_county)
+                    progress_bar.progress(100)
+                    status_text.text("Complete!")
+                except Exception as e:
+                    st.error(f"Error loading data: {str(e)}")
+                    st.info("Try selecting a different state/county or check the logs")
+                    return
                 
                 # Clear progress indicators
                 progress_bar.empty()
@@ -380,12 +445,17 @@ def main():
                     with col3:
                         st.metric("Number of Neighborhoods", len(data))
                     
-                    # Create and display the map
-                    map_chart = create_3d_roi_map_optimized(data)
-                    if map_chart:
-                        st.pydeck_chart(map_chart)
+                    # Check if we have coordinates for visualization
+                    if data['Latitude'].isna().sum() == len(data):
+                        st.warning("⚠️ No coordinates available for visualization. The app may be experiencing network restrictions.")
+                        st.info("Try refreshing the page or selecting a different location.")
                     else:
-                        st.error("Failed to create map visualization")
+                        # Create and display the map
+                        map_chart = create_3d_roi_map_optimized(data)
+                        if map_chart:
+                            st.pydeck_chart(map_chart, use_container_width=True)
+                        else:
+                            st.error("Failed to create map visualization")
                     
                     # Add data table with pagination for better performance
                     with st.expander("View Raw Data"):
