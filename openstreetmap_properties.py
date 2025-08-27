@@ -167,41 +167,106 @@ class OpenStreetMapProperties:
     
     def fetch_properties_in_area(self, bbox: Dict, property_types: List[str] = None) -> List[Dict]:
         """Fetch properties from OpenStreetMap within the bounding box"""
-        if property_types is None:
-            property_types = ['residential', 'house', 'apartment', 'condo']
-        
         properties = []
         
         try:
+            # Expand the bounding box if it's too small
+            lat_range = bbox['max_lat'] - bbox['min_lat']
+            lon_range = bbox['max_lon'] - bbox['min_lon']
+            
+            # If bounding box is too small, expand it
+            if lat_range < 0.01 or lon_range < 0.01:
+                expansion = 0.01  # About 0.7 miles
+                bbox['min_lat'] -= expansion
+                bbox['max_lat'] += expansion
+                bbox['min_lon'] -= expansion
+                bbox['max_lon'] += expansion
+                logger.info(f"Expanded bounding box to: {bbox}")
+            
             # Create a comprehensive Overpass query for the bounding box
             query = f"""
-            [out:json][timeout:30];
+            [out:json][timeout:60];
             (
               way["building"="residential"]({bbox['min_lat']},{bbox['min_lon']},{bbox['max_lat']},{bbox['max_lon']});
               way["building"="house"]({bbox['min_lat']},{bbox['min_lon']},{bbox['max_lat']},{bbox['max_lon']});
               way["building"="apartment"]({bbox['min_lat']},{bbox['min_lon']},{bbox['max_lat']},{bbox['max_lon']});
               way["building"="detached"]({bbox['min_lat']},{bbox['min_lon']},{bbox['max_lat']},{bbox['max_lon']});
+              way["building"="yes"]({bbox['min_lat']},{bbox['min_lon']},{bbox['max_lat']},{bbox['max_lon']});
+              way["landuse"="residential"]({bbox['min_lat']},{bbox['min_lon']},{bbox['max_lat']},{bbox['max_lon']});
               way["landuse"="residential"]({bbox['min_lat']},{bbox['min_lon']},{bbox['max_lat']},{bbox['max_lon']});
               node["amenity"="house"]({bbox['min_lat']},{bbox['min_lon']},{bbox['max_lat']},{bbox['max_lon']});
+              node["building"="residential"]({bbox['min_lat']},{bbox['min_lon']},{bbox['max_lat']},{bbox['max_lon']});
             );
             out body;
             >;
             out skel qt;
             """
             
+            logger.info(f"Querying Overpass API with bounding box: {bbox}")
+            
             # Use Overpass API
             url = "https://overpass-api.de/api/interpreter"
-            response = requests.post(url, data=query, timeout=45)
+            response = requests.post(url, data=query, timeout=60)
             
             if response.status_code == 200:
                 data = response.json()
                 properties = self._parse_overpass_response(data)
                 logger.info(f"Found {len(properties)} properties in bounding box")
+                
+                # If no properties found, try a broader search
+                if len(properties) == 0:
+                    logger.info("No properties found, trying broader search...")
+                    properties = self._try_broader_search(bbox)
+                    
             else:
                 logger.warning(f"Overpass API returned status {response.status_code}")
+                logger.warning(f"Response: {response.text[:200]}")
                 
         except Exception as e:
             logger.error(f"Error fetching properties: {e}")
+            # Try fallback method
+            properties = self._try_broader_search(bbox)
+        
+        return properties
+    
+    def _try_broader_search(self, bbox: Dict) -> List[Dict]:
+        """Try a broader search when the main query returns no results"""
+        properties = []
+        
+        try:
+            # Expand the bounding box significantly
+            expansion = 0.05  # About 3.5 miles
+            expanded_bbox = {
+                'min_lat': bbox['min_lat'] - expansion,
+                'max_lat': bbox['max_lat'] + expansion,
+                'min_lon': bbox['min_lon'] - expansion,
+                'max_lon': bbox['max_lon'] + expansion
+            }
+            
+            logger.info(f"Trying broader search with expanded bbox: {expanded_bbox}")
+            
+            # Simpler query for broader area
+            query = f"""
+            [out:json][timeout:60];
+            (
+              way["building"]({expanded_bbox['min_lat']},{expanded_bbox['min_lon']},{expanded_bbox['max_lat']},{expanded_bbox['max_lon']});
+              node["building"]({expanded_bbox['min_lat']},{expanded_bbox['min_lon']},{expanded_bbox['max_lat']},{expanded_bbox['max_lon']});
+            );
+            out body;
+            >;
+            out skel qt;
+            """
+            
+            url = "https://overpass-api.de/api/interpreter"
+            response = requests.post(url, data=query, timeout=60)
+            
+            if response.status_code == 200:
+                data = response.json()
+                properties = self._parse_overpass_response(data)
+                logger.info(f"Broader search found {len(properties)} properties")
+            
+        except Exception as e:
+            logger.error(f"Error in broader search: {e}")
         
         return properties
     
@@ -211,46 +276,60 @@ class OpenStreetMapProperties:
         
         try:
             elements = data.get('elements', [])
+            logger.info(f"Parsing {len(elements)} elements from Overpass response")
             
             for element in elements:
-                if element.get('type') == 'way' and 'tags' in element:
-                    tags = element['tags']
+                element_type = element.get('type')
+                tags = element.get('tags', {})
+                
+                # Handle both ways and nodes
+                if element_type in ['way', 'node'] and tags:
+                    # Check if this is a building or residential area
+                    building_type = tags.get('building')
+                    landuse = tags.get('landuse')
                     
-                    # Extract property information
-                    prop = {
-                        'osm_id': element.get('id'),
-                        'type': 'way',
-                        'building_type': tags.get('building', 'unknown'),
-                        'landuse': tags.get('landuse', 'unknown'),
-                        'address': {
-                            'street': tags.get('addr:street'),
-                            'housenumber': tags.get('addr:housenumber'),
-                            'city': tags.get('addr:city'),
-                            'state': tags.get('addr:state'),
-                            'postcode': tags.get('addr:postcode')
-                        },
-                        'features': {
-                            'floors': tags.get('building:levels'),
-                            'units': tags.get('building:units'),
-                            'year_built': tags.get('start_date'),
-                            'roof_type': tags.get('roof:type'),
-                            'material': tags.get('building:material')
+                    # Only include if it's a building or residential area
+                    if building_type or landuse == 'residential':
+                        prop = {
+                            'osm_id': element.get('id'),
+                            'type': element_type,
+                            'building_type': building_type or 'unknown',
+                            'landuse': landuse or 'unknown',
+                            'address': {
+                                'street': tags.get('addr:street'),
+                                'housenumber': tags.get('addr:housenumber'),
+                                'city': tags.get('addr:city'),
+                                'state': tags.get('addr:state'),
+                                'postcode': tags.get('addr:postcode')
+                            },
+                            'features': {
+                                'floors': tags.get('building:levels'),
+                                'units': tags.get('building:units'),
+                                'year_built': tags.get('start_date'),
+                                'roof_type': tags.get('roof:type'),
+                                'material': tags.get('building:material')
+                            }
                         }
-                    }
-                    
-                    # Get coordinates for the way
-                    if 'center' in element:
-                        prop['latitude'] = element['center']['lat']
-                        prop['longitude'] = element['center']['lon']
-                    elif 'lat' in element and 'lon' in element:
-                        prop['latitude'] = element['lat']
-                        prop['longitude'] = element['lon']
-                    
-                    properties.append(prop)
+                        
+                        # Get coordinates
+                        if element_type == 'way' and 'center' in element:
+                            prop['latitude'] = element['center']['lat']
+                            prop['longitude'] = element['center']['lon']
+                        elif 'lat' in element and 'lon' in element:
+                            prop['latitude'] = element['lat']
+                            prop['longitude'] = element['lon']
+                        
+                        # Only add if we have coordinates
+                        if 'latitude' in prop and 'longitude' in prop:
+                            properties.append(prop)
+                            logger.debug(f"Added property: {prop['building_type']} at {prop['latitude']}, {prop['longitude']}")
+                        else:
+                            logger.debug(f"Skipping property without coordinates: {prop['osm_id']}")
                     
         except Exception as e:
             logger.error(f"Error parsing Overpass response: {e}")
         
+        logger.info(f"Successfully parsed {len(properties)} properties")
         return properties
     
     def enrich_with_public_data(self, properties: List[Dict], county: str, state: str) -> List[Dict]:
@@ -391,3 +470,43 @@ class OpenStreetMapProperties:
         }
         
         return summary
+    
+    def test_overpass_query(self, county_name: str, state_name: str):
+        """Test function to debug Overpass API queries"""
+        try:
+            logger.info(f"Testing Overpass API for {county_name}, {state_name}")
+            
+            # Get county boundaries
+            bbox = self.get_county_boundaries(county_name, state_name)
+            if not bbox:
+                logger.error("No bounding box found")
+                return
+            
+            logger.info(f"Bounding box: {bbox}")
+            
+            # Test simple query
+            test_query = f"""
+            [out:json][timeout:30];
+            way["building"]({bbox['min_lat']},{bbox['min_lon']},{bbox['max_lat']},{bbox['max_lon']});
+            out body;
+            >;
+            out skel qt;
+            """
+            
+            url = "https://overpass-api.de/api/interpreter"
+            response = requests.post(url, data=test_query, timeout=30)
+            
+            logger.info(f"Test query status: {response.status_code}")
+            if response.status_code == 200:
+                data = response.json()
+                elements = data.get('elements', [])
+                logger.info(f"Test query found {len(elements)} elements")
+                
+                # Show first few elements
+                for i, element in enumerate(elements[:5]):
+                    logger.info(f"Element {i}: {element.get('type')} - {element.get('tags', {}).get('building', 'no building tag')}")
+            else:
+                logger.warning(f"Test query failed: {response.text[:200]}")
+                
+        except Exception as e:
+            logger.error(f"Test query error: {e}")
