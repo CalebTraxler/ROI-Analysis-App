@@ -991,7 +991,7 @@ def main():
                             map_chart = create_robust_fallback_map(data, properties_df)
                         
                         if map_chart:
-                            st.pydeck_chart(map_chart, width='stretch')
+                            st.pydeck_chart(map_chart, use_container_width=True)
                             
                             # Enhanced legend with property information
                             col1, col2 = st.columns(2)
