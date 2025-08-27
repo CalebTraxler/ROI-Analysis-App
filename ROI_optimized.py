@@ -348,8 +348,8 @@ def load_area_data_optimized(state, county, network_available=True):
     return filtered_df
 
 # Robust fallback map with OpenStreetMap background
-def create_robust_fallback_map(data):
-    """Create a map with guaranteed OpenStreetMap background"""
+def create_robust_fallback_map(data, properties_df=None):
+    """Create a map with guaranteed OpenStreetMap background and optional property overlay"""
     if len(data) == 0:
         return None
     
@@ -474,10 +474,42 @@ def create_robust_fallback_map(data):
         pickable=False
     )
     
+    # Add properties layer if available
+    all_layers = [grid_layer, heatmap_layer, scatter_layer]
+    if properties_df is not None and not properties_df.empty:
+        valid_properties = properties_df[properties_df['latitude'].notna() & properties_df['longitude'].notna()].copy()
+        
+        if len(valid_properties) > 0:
+            # Prepare properties data with tooltips
+            properties_with_tooltips = valid_properties.copy()
+            properties_with_tooltips['tooltip_text'] = properties_with_tooltips.apply(
+                lambda row: f"<b>Property Details</b><br/>"
+                           f"Type: {row.get('building_type', 'N/A')}<br/>"
+                           f"Address: {row.get('address', {}).get('street', 'N/A')} {row.get('address', {}).get('housenumber', '')}<br/>"
+                           f"Estimated Value: ${row.get('estimated_value', 0):,.0f}<br/>"
+                           f"OSM ID: {row.get('osm_id', 'N/A')}",
+                axis=1
+            )
+            
+            properties_layer = pdk.Layer(
+                'ScatterplotLayer',
+                properties_with_tooltips,
+                get_position=['longitude', 'latitude'],
+                get_radius=8,
+                get_fill_color=[0, 100, 200, 180],
+                get_line_color=[255, 255, 255, 150],
+                pickable=True,
+                opacity=0.7,
+                stroked=True,
+                filled=True,
+                line_width_min_pixels=1
+            )
+            all_layers.append(properties_layer)
+    
     # Try to create deck with OpenStreetMap style
     try:
         deck = pdk.Deck(
-            layers=[grid_layer, heatmap_layer, scatter_layer],  # Include heatmap layer
+            layers=all_layers,  # Include all layers including properties
             initial_view_state=view_state,
             map_style='https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',
             tooltip={
@@ -498,7 +530,7 @@ def create_robust_fallback_map(data):
         # Final fallback: no map style but with coordinate grid
         try:
             deck = pdk.Deck(
-                layers=[grid_layer, heatmap_layer, scatter_layer],  # Include heatmap layer
+                layers=all_layers,  # Include all layers including properties
                 initial_view_state=view_state,
                 tooltip={
                     "html": "<b>{tooltip_text}</b>",
@@ -517,8 +549,8 @@ def create_robust_fallback_map(data):
             return None
 
 # Enhanced 3D map creation with guaranteed background display
-def create_3d_roi_map_optimized(data, use_satellite=False):
-    """Enhanced map creation with guaranteed background display"""
+def create_3d_roi_map_optimized(data, use_satellite=False, properties_df=None):
+    """Enhanced map creation with guaranteed background display and optional property overlay"""
     if len(data) == 0:
         return None
     
@@ -580,7 +612,7 @@ def create_3d_roi_map_optimized(data, use_satellite=False):
     # Create heatmap layer with exponential weighting for ROI (proven working method)
     scatter_data['weighted_roi'] = np.exp(scatter_data['ROI'] / 50) - 1  # Exponential scaling for better heat intensity
     
-    # Create layers
+    # Create base layers
     layers = [
         pdk.Layer(
             'HeatmapLayer',
@@ -614,6 +646,50 @@ def create_3d_roi_map_optimized(data, use_satellite=False):
             radius_scale=1
         )
     ]
+    
+    # Add properties layer if available
+    if properties_df is not None and not properties_df.empty:
+        valid_properties = properties_df[properties_df['latitude'].notna() & properties_df['longitude'].notna()].copy()
+        
+        if len(valid_properties) > 0:
+            # Prepare properties data with tooltips
+            properties_with_tooltips = valid_properties.copy()
+            properties_with_tooltips['tooltip_text'] = properties_with_tooltips.apply(
+                lambda row: f"<b>Property Details</b><br/>"
+                           f"Type: {row.get('building_type', 'N/A')}<br/>"
+                           f"Address: {row.get('address', {}).get('street', 'N/A')} {row.get('address', {}).get('housenumber', '')}<br/>"
+                           f"Estimated Value: ${row.get('estimated_value', 0):,.0f}<br/>"
+                           f"OSM ID: {row.get('osm_id', 'N/A')}",
+                axis=1
+            )
+            
+            # Create properties layer with smaller radius for individual houses
+            properties_layer = pdk.Layer(
+                'ScatterplotLayer',
+                properties_with_tooltips,
+                get_position=['longitude', 'latitude'],
+                get_radius=8,  # Small radius for individual properties
+                get_fill_color=[0, 100, 200, 180],  # Blue color for properties
+                get_line_color=[255, 255, 255, 150],
+                pickable=True,
+                opacity=0.7,
+                stroked=True,
+                filled=True,
+                line_width_min_pixels=1,
+                radius_scale=1
+            )
+            
+            # Add properties layer on top
+            layers.append(properties_layer)
+            
+            # Update tooltip to show both ROI and property info
+            scatter_data['tooltip_text'] = scatter_data.apply(
+                lambda row: f"<b>Neighborhood: {row['RegionName']}</b><br/>"
+                           f"ROI: {row['ROI']:.1f}%<br/>"
+                           f"Value: ${row['Current_Value']:,.0f}<br/>"
+                           f"<i>Zoom in to see individual properties</i>",
+                axis=1
+            )
 
     # FORCE OpenStreetMap tiles - this should work on Streamlit Cloud
     try:
@@ -881,23 +957,59 @@ def main():
                     valid_coords = data['Latitude'].notna().sum()
                     if valid_coords > 0:
                         st.markdown('<h3 class="section-header">Geographic Visualization</h3>', unsafe_allow_html=True)
-                        # Try to create the enhanced map first
-                        map_chart = create_3d_roi_map_optimized(data, use_satellite and network_available)
+                        
+                        # Add property data loading option above the map
+                        col1, col2 = st.columns([3, 1])
+                        with col1:
+                            st.markdown("**Map Features:** ROI Heatmap + Individual Properties")
+                        with col2:
+                            load_properties = st.checkbox("Load Properties", value=True, 
+                                                       help="Show individual houses on the map")
+                        
+                        # Load properties if requested
+                        properties_df = None
+                        if load_properties:
+                            with st.spinner('Loading property data for map overlay...'):
+                                try:
+                                    osm_fetcher = OpenStreetMapProperties()
+                                    properties_df = osm_fetcher.get_county_properties(
+                                        selected_county, selected_state, max_properties=1000
+                                    )
+                                    if not properties_df.empty:
+                                        st.success(f"✅ Loaded {len(properties_df)} properties")
+                                    else:
+                                        st.warning("⚠️ No properties found for this county")
+                                except Exception as e:
+                                    st.error(f"❌ Error loading properties: {str(e)}")
+                                    properties_df = None
+                        
+                        # Try to create the enhanced map with properties overlay
+                        map_chart = create_3d_roi_map_optimized(data, use_satellite and network_available, properties_df)
                         
                         # If enhanced map fails, try fallback map
                         if not map_chart:
-                            map_chart = create_robust_fallback_map(data)
+                            map_chart = create_robust_fallback_map(data, properties_df)
                         
                         if map_chart:
-                            st.pydeck_chart(map_chart, use_container_width=True)
+                            st.pydeck_chart(map_chart, width='stretch')
                             
-                            # Add legend with professional styling
-                            st.markdown("""
-                            **Color Legend:**
-                            - **Light Yellow**: Lower ROI
-                            - **Orange**: Medium ROI  
-                            - **Deep Red**: Higher ROI
-                            """)
+                            # Enhanced legend with property information
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                st.markdown("""
+                                **ROI Color Legend:**
+                                - **Light Yellow**: Lower ROI
+                                - **Orange**: Medium ROI  
+                                - **Deep Red**: Higher ROI
+                                """)
+                            with col2:
+                                if properties_df is not None and not properties_df.empty:
+                                    st.markdown("""
+                                    **Property Overlay:**
+                                    - **Blue dots**: Individual houses
+                                    - **Zoom in** to see properties clearly
+                                    - **Click properties** for details
+                                    """)
                     
                     # ROI Distribution with professional styling
                     st.markdown('<h3 class="section-header">ROI Performance Analysis</h3>', unsafe_allow_html=True)
