@@ -12,6 +12,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 import requests
+from openstreetmap_properties import OpenStreetMapProperties
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -713,6 +714,71 @@ def create_3d_roi_map_optimized(data, use_satellite=False):
         
         return deck
 
+def create_properties_map(properties_df):
+    """Create a map visualization for OpenStreetMap properties"""
+    try:
+        # Filter out rows without coordinates
+        valid_properties = properties_df[properties_df['latitude'].notna() & properties_df['longitude'].notna()].copy()
+        
+        if len(valid_properties) == 0:
+            logger.warning("No valid coordinates for properties map")
+            return None
+        
+        # Create view state centered on the properties
+        view_state = pdk.ViewState(
+            longitude=valid_properties['longitude'].mean(),
+            latitude=valid_properties['latitude'].mean(),
+            zoom=10,
+            pitch=0,
+            bearing=0
+        )
+        
+        # Create scatter layer for properties
+        layer = pdk.Layer(
+            'ScatterplotLayer',
+            valid_properties,
+            get_position=['longitude', 'latitude'],
+            get_radius=20,
+            get_fill_color=[0, 100, 200, 180],  # Blue color for properties
+            get_line_color=[255, 255, 255, 150],
+            pickable=True,
+            opacity=0.7,
+            stroked=True,
+            filled=True,
+            line_width_min_pixels=1
+        )
+        
+        # Create deck with OpenStreetMap style
+        deck = pdk.Deck(
+            layers=[layer],
+            initial_view_state=view_state,
+            map_style='https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',  # Light style
+            tooltip={
+                "html": """
+                <b>Property Details</b><br>
+                Type: {building_type}<br>
+                Address: {street} {housenumber}<br>
+                Estimated Value: {estimated_value}<br>
+                OSM ID: {osm_id}
+                """,
+                "style": {
+                    "backgroundColor": "rgba(0, 0, 0, 0.8)",
+                    "color": "white",
+                    "padding": "10px",
+                    "borderRadius": "5px",
+                    "fontSize": "12px"
+                }
+            },
+            height=500
+        )
+        
+        logger.info("Successfully created properties map")
+        return deck
+        
+    except Exception as e:
+        logger.error(f"Error creating properties map: {e}")
+        return None
+
 # Main app section with performance optimizations
 def main():
     # Initialize cache database
@@ -901,6 +967,105 @@ def main():
                             file_name=f"{selected_county}_{selected_state}_roi_data.csv",
                             mime="text/csv"
                         )
+                    
+                    # OpenStreetMap Properties Section
+                    st.markdown('<h3 class="section-header">OpenStreetMap Property Data</h3>', unsafe_allow_html=True)
+                    
+                    # Add property data loading option
+                    load_properties = st.checkbox("Load OpenStreetMap property data for this county", 
+                                               help="Fetch detailed property information from OpenStreetMap")
+                    
+                    if load_properties:
+                        with st.spinner('Loading OpenStreetMap property data...'):
+                            try:
+                                # Initialize OSM properties fetcher
+                                osm_fetcher = OpenStreetMapProperties()
+                                
+                                # Get properties for the selected county
+                                properties_df = osm_fetcher.get_county_properties(selected_county, selected_state, max_properties=500)
+                                
+                                if not properties_df.empty:
+                                    # Display property summary
+                                    property_summary = osm_fetcher.get_property_summary(properties_df)
+                                    
+                                    col1, col2, col3, col4 = st.columns(4)
+                                    with col1:
+                                        st.markdown(f'<div class="metric-container"><strong>Total Properties</strong><br><span style="font-size: 1.5rem; color: #10b981;">{property_summary.get("total_properties", 0)}</span></div>', unsafe_allow_html=True)
+                                    with col2:
+                                        avg_value = property_summary.get("avg_estimated_value", 0)
+                                        st.markdown(f'<div class="metric-container"><strong>Avg Estimated Value</strong><br><span style="font-size: 1.5rem; color: #10b981;">${avg_value:,.0f}</span></div>', unsafe_allow_html=True)
+                                    with col3:
+                                        coord_coverage = property_summary.get("coordinate_coverage", 0)
+                                        st.markdown(f'<div class="metric-container"><strong>Coordinate Coverage</strong><br><span style="font-size: 1.5rem; color: #10b981;">{coord_coverage:.0f}%</span></div>', unsafe_allow_html=True)
+                                    with col4:
+                                        address_coverage = property_summary.get("address_coverage", 0)
+                                        st.markdown(f'<div class="metric-container"><strong>Address Coverage</strong><br><span style="font-size: 1.5rem; color: #10b981;">{address_coverage:.0f}%</span></div>', unsafe_allow_html=True)
+                                    
+                                    # Property type distribution
+                                    st.markdown('<h4 class="section-header">Property Type Distribution</h4>', unsafe_allow_html=True)
+                                    property_types = property_summary.get("property_types", {})
+                                    if property_types:
+                                        type_df = pd.DataFrame(list(property_types.items()), columns=['Property Type', 'Count'])
+                                        st.bar_chart(type_df.set_index('Property Type'))
+                                    
+                                    # Properties map
+                                    if properties_df['latitude'].notna().sum() > 0:
+                                        st.markdown('<h4 class="section-header">Properties Map</h4>', unsafe_allow_html=True)
+                                        
+                                        # Create properties map
+                                        properties_map = create_properties_map(properties_df)
+                                        if properties_map:
+                                            st.pydeck_chart(properties_map, use_container_width=True)
+                                    
+                                    # Properties data table
+                                    with st.expander("View Properties Data"):
+                                        st.markdown('<h4 class="section-header">Properties Data Table</h4>', unsafe_allow_html=True)
+                                        
+                                        # Clean up the DataFrame for display
+                                        display_properties = properties_df.copy()
+                                        
+                                        # Flatten address and features columns for better display
+                                        if 'address' in display_properties.columns:
+                                            address_df = pd.json_normalize(display_properties['address'])
+                                            display_properties = pd.concat([display_properties.drop('address', axis=1), address_df], axis=1)
+                                        
+                                        if 'features' in display_properties.columns:
+                                            features_df = pd.json_normalize(display_properties['features'])
+                                            display_properties = pd.concat([display_properties.drop('features', axis=1), features_df], axis=1)
+                                        
+                                        # Select key columns for display
+                                        key_columns = ['osm_id', 'building_type', 'latitude', 'longitude', 'estimated_value', 
+                                                     'street', 'housenumber', 'city', 'state', 'postcode', 'floors', 'units']
+                                        available_columns = [col for col in key_columns if col in display_properties.columns]
+                                        
+                                        # Format numeric columns
+                                        if 'estimated_value' in display_properties.columns:
+                                            display_properties['estimated_value'] = display_properties['estimated_value'].apply(
+                                                lambda x: f"${x:,.0f}" if pd.notna(x) else "N/A"
+                                            )
+                                        
+                                        st.dataframe(display_properties[available_columns], use_container_width=True, hide_index=True)
+                                        
+                                        # Download properties data
+                                        properties_csv = properties_df.to_csv(index=False)
+                                        st.download_button(
+                                            label="Download properties data as CSV",
+                                            data=properties_csv,
+                                            file_name=f"{selected_county}_{selected_state}_properties.csv",
+                                            mime="text/csv"
+                                        )
+                                        
+                                else:
+                                    st.warning("No OpenStreetMap properties found for this county. This could be due to:")
+                                    st.info("""
+                                    - Limited OpenStreetMap coverage in rural areas
+                                    - County boundaries not matching OSM data
+                                    - API rate limiting (try again in a few minutes)
+                                    """)
+                                    
+                            except Exception as e:
+                                st.error(f"Error loading OpenStreetMap properties: {str(e)}")
+                                st.info("This feature requires internet connection and may be rate-limited. Try again later.")
                 else:
                     st.warning(f"No data found for {selected_county}, {selected_state}")
                     st.info("Try selecting a different state and county combination")
