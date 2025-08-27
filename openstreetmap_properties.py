@@ -187,15 +187,11 @@ class OpenStreetMapProperties:
             query = f"""
             [out:json][timeout:60];
             (
-              way["building"="residential"]({bbox['min_lat']},{bbox['min_lon']},{bbox['max_lat']},{bbox['max_lon']});
-              way["building"="house"]({bbox['min_lat']},{bbox['min_lon']},{bbox['max_lat']},{bbox['max_lon']});
-              way["building"="apartment"]({bbox['min_lat']},{bbox['min_lon']},{bbox['max_lat']},{bbox['max_lon']});
-              way["building"="detached"]({bbox['min_lat']},{bbox['min_lon']},{bbox['max_lat']},{bbox['max_lon']});
-              way["building"="yes"]({bbox['min_lat']},{bbox['min_lon']},{bbox['max_lat']},{bbox['max_lon']});
+              way["building"]({bbox['min_lat']},{bbox['min_lon']},{bbox['max_lat']},{bbox['max_lon']});
+              node["building"]({bbox['min_lat']},{bbox['min_lon']},{bbox['max_lat']},{bbox['max_lon']});
               way["landuse"="residential"]({bbox['min_lat']},{bbox['min_lon']},{bbox['max_lat']},{bbox['max_lon']});
-              way["landuse"="residential"]({bbox['min_lat']},{bbox['min_lon']},{bbox['max_lat']},{bbox['max_lon']});
+              way["amenity"="house"]({bbox['min_lat']},{bbox['min_lon']},{bbox['max_lat']},{bbox['max_lon']});
               node["amenity"="house"]({bbox['min_lat']},{bbox['min_lon']},{bbox['max_lat']},{bbox['max_lon']});
-              node["building"="residential"]({bbox['min_lat']},{bbox['min_lon']},{bbox['max_lat']},{bbox['max_lon']});
             );
             out body;
             >;
@@ -278,9 +274,16 @@ class OpenStreetMapProperties:
             elements = data.get('elements', [])
             logger.info(f"Parsing {len(elements)} elements from Overpass response")
             
+            # Count different types for debugging
+            element_types = {}
+            building_types = {}
+            
             for element in elements:
                 element_type = element.get('type')
                 tags = element.get('tags', {})
+                
+                # Track element types
+                element_types[element_type] = element_types.get(element_type, 0) + 1
                 
                 # Handle both ways and nodes
                 if element_type in ['way', 'node'] and tags:
@@ -288,7 +291,11 @@ class OpenStreetMapProperties:
                     building_type = tags.get('building')
                     landuse = tags.get('landuse')
                     
-                    # Only include if it's a building or residential area
+                    # Track building types
+                    if building_type:
+                        building_types[building_type] = building_types.get(building_type, 0) + 1
+                    
+                    # More inclusive filtering - include any building or residential landuse
                     if building_type or landuse == 'residential':
                         prop = {
                             'osm_id': element.get('id'),
@@ -311,25 +318,38 @@ class OpenStreetMapProperties:
                             }
                         }
                         
-                        # Get coordinates
+                        # Get coordinates - try multiple methods
+                        coordinates_found = False
+                        
                         if element_type == 'way' and 'center' in element:
                             prop['latitude'] = element['center']['lat']
                             prop['longitude'] = element['center']['lon']
+                            coordinates_found = True
                         elif 'lat' in element and 'lon' in element:
                             prop['latitude'] = element['lat']
                             prop['longitude'] = element['lon']
+                            coordinates_found = True
+                        elif element_type == 'way' and 'bounds' in element:
+                            # For ways without center, use bounds center
+                            bounds = element['bounds']
+                            prop['latitude'] = (bounds['minlat'] + bounds['maxlat']) / 2
+                            prop['longitude'] = (bounds['minlon'] + bounds['maxlon']) / 2
+                            coordinates_found = True
                         
                         # Only add if we have coordinates
-                        if 'latitude' in prop and 'longitude' in prop:
+                        if coordinates_found:
                             properties.append(prop)
-                            logger.debug(f"Added property: {prop['building_type']} at {prop['latitude']}, {prop['longitude']}")
                         else:
                             logger.debug(f"Skipping property without coordinates: {prop['osm_id']}")
-                    
+            
+            # Log summary for debugging
+            logger.info(f"Element type breakdown: {element_types}")
+            logger.info(f"Building type breakdown: {building_types}")
+            logger.info(f"Successfully parsed {len(properties)} properties")
+            
         except Exception as e:
             logger.error(f"Error parsing Overpass response: {e}")
         
-        logger.info(f"Successfully parsed {len(properties)} properties")
         return properties
     
     def enrich_with_public_data(self, properties: List[Dict], county: str, state: str) -> List[Dict]:
