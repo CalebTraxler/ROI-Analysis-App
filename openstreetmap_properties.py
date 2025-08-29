@@ -75,77 +75,76 @@ class OpenStreetMapProperties:
             return self._get_approximate_county_coordinates(county_name, state_name)
     
     def _get_approximate_county_coordinates(self, county_name: str, state_name: str) -> Optional[Dict]:
-        """Get approximate county coordinates when geocoding fails"""
-        # Known county centers for major counties
-        county_coordinates = {
-            'CA': {
-                'Alameda': (37.7652, -122.2416),
-                'Los Angeles': (34.0522, -118.2437),
-                'San Diego': (32.7157, -117.1611),
-                'Orange': (33.7175, -117.8311),
-                'Santa Clara': (37.3541, -121.9552),
-                'San Francisco': (37.7749, -122.4194),
-                'Marin': (37.9735, -122.5311),
-                'Contra Costa': (37.9191, -122.3281),
-                'San Mateo': (37.4969, -122.3330),
-                'Ventura': (34.3705, -119.1391)
-            },
-            'TX': {
-                'Harris': (29.7604, -95.3698),
-                'Dallas': (32.7767, -96.7970),
-                'Tarrant': (32.7555, -97.3308),
-                'Bexar': (29.4241, -98.4936),
-                'Travis': (30.2672, -97.7431)
-            },
-            'NY': {
-                'Kings': (40.6782, -73.9442),
-                'Queens': (40.7282, -73.7949),
-                'New York': (40.7128, -74.0060),
-                'Bronx': (40.8448, -73.8648),
-                'Richmond': (40.5795, -74.1502)
-            },
-            'FL': {
-                'Miami-Dade': (25.7617, -80.1918),
-                'Broward': (26.1224, -80.1373),
-                'Palm Beach': (26.7153, -80.0534),
-                'Hillsborough': (27.9904, -82.3018),
-                'Orange': (28.5383, -81.3792)
-            }
-        }
-        
-        # Try to find exact county match
-        if state_name in county_coordinates:
-            for county, coords in county_coordinates[state_name].items():
-                if county.lower() in county_name.lower() or county_name.lower() in county.lower():
-                    lat, lon = coords
-                    # Create a bounding box around the county center
-                    bbox_size = 0.1  # Approximately 6-7 miles
-                    return {
-                        'min_lat': lat - bbox_size,
-                        'max_lat': lat + bbox_size,
-                        'min_lon': lon - bbox_size,
-                        'max_lon': lon + bbox_size,
-                        'center_lat': lat,
-                        'center_lon': lon
-                    }
-        
-        # Fallback to state center with large bounding box
+        """Get approximate county coordinates when geocoding fails - universal approach"""
+        try:
+            # Try multiple geocoding strategies for any county
+            search_strategies = [
+                f"{county_name} County, {state_name}, USA",
+                f"{county_name}, {state_name}, USA",
+                f"{county_name} County, {state_name}",
+                f"{county_name}, {state_name}",
+                f"{county_name} County",
+                f"{county_name}"
+            ]
+            
+            for strategy in search_strategies:
+                try:
+                    logger.info(f"Trying fallback geocoding: {strategy}")
+                    location = self.geolocator.geocode(strategy, timeout=10)
+                    
+                    if location:
+                        # Create a reasonable bounding box around the found location
+                        bbox_size = 0.15  # About 10-12 miles radius
+                        return {
+                            'min_lat': location.latitude - bbox_size,
+                            'max_lat': location.latitude + bbox_size,
+                            'min_lon': location.longitude - bbox_size,
+                            'max_lon': location.longitude + bbox_size,
+                            'center_lat': location.latitude,
+                            'center_lon': location.longitude
+                        }
+                    
+                    time.sleep(1)  # Rate limiting
+                    
+                except Exception as e:
+                    logger.debug(f"Fallback geocoding failed for {strategy}: {e}")
+                    continue
+            
+            # If all geocoding fails, use state-based fallback
+            logger.warning(f"All geocoding strategies failed for {county_name}, {state_name}")
+            return self._get_state_based_fallback(state_name)
+            
+        except Exception as e:
+            logger.error(f"Error in fallback coordinate lookup: {e}")
+            return self._get_state_based_fallback(state_name)
+    
+    def _get_state_based_fallback(self, state_name: str) -> Dict:
+        """Get state-based fallback coordinates when county lookup fails"""
+        # Comprehensive state center coordinates
         state_centers = {
-            'CA': (36.7783, -119.4179),
-            'TX': (31.9686, -99.9018),
-            'FL': (27.7663, -82.6404),
-            'NY': (42.1657, -74.9481),
-            'IL': (40.3363, -89.0022),
-            'OH': (40.3888, -82.7649),
-            'GA': (33.0406, -83.6431),
-            'NC': (35.5397, -79.8431),
-            'MI': (43.3266, -84.5361),
-            'PA': (41.2033, -77.1945)
+            'AL': (32.3182, -86.9023), 'AK': (63.5887, -154.4931), 'AZ': (33.7298, -111.4312),
+            'AR': (35.2010, -91.8318), 'CA': (36.7783, -119.4179), 'CO': (39.5501, -105.7821),
+            'CT': (41.6032, -73.0877), 'DE': (38.9108, -75.5277), 'FL': (27.7663, -82.6404),
+            'GA': (33.0406, -83.6431), 'HI': (19.8968, -155.5828), 'ID': (44.2405, -114.4788),
+            'IL': (40.3363, -89.0022), 'IN': (39.8494, -86.2583), 'IA': (42.0115, -93.2105),
+            'KS': (38.5266, -96.7265), 'KY': (37.6681, -84.6701), 'LA': (31.1695, -91.8678),
+            'ME': (44.6939, -69.3819), 'MD': (39.0639, -76.8021), 'MA': (42.2304, -71.5301),
+            'MI': (43.3266, -84.5361), 'MN': (46.7296, -94.6859), 'MS': (32.7416, -89.6787),
+            'MO': (38.4561, -92.2884), 'MT': (46.8797, -110.3626), 'NE': (41.4925, -99.9018),
+            'NV': (38.8026, -116.4194), 'NH': (43.1939, -71.5724), 'NJ': (40.0583, -74.4057),
+            'NM': (34.5199, -105.8701), 'NY': (42.1657, -74.9481), 'NC': (35.7596, -79.0193),
+            'ND': (47.5515, -101.0020), 'OH': (40.3888, -82.7649), 'OK': (35.0078, -97.0929),
+            'OR': (44.5720, -122.0709), 'PA': (41.2033, -77.1945), 'RI': (41.6809, -71.5118),
+            'SC': (33.8569, -80.9450), 'SD': (44.2998, -99.4388), 'TN': (35.7478, -86.6923),
+            'TX': (31.9686, -99.9018), 'UT': (39.3210, -111.0937), 'VT': (44.0459, -72.7107),
+            'VA': (37.4316, -78.6569), 'WA': (47.7511, -120.7401), 'WV': (38.5976, -80.4549),
+            'WI': (43.7844, -88.7879), 'WY': (42.7475, -107.2085)
         }
         
         if state_name in state_centers:
             lat, lon = state_centers[state_name]
-            bbox_size = 0.2  # Larger bounding box for state-level fallback
+            bbox_size = 0.25  # Larger bounding box for state-level fallback
+            logger.info(f"Using state center fallback for {state_name}")
             return {
                 'min_lat': lat - bbox_size,
                 'max_lat': lat + bbox_size,
@@ -156,6 +155,7 @@ class OpenStreetMapProperties:
             }
         
         # Final fallback to US center
+        logger.warning("Using US center fallback")
         return {
             'min_lat': 39.8283 - 0.3,
             'max_lat': 39.8283 + 0.3,
@@ -183,45 +183,178 @@ class OpenStreetMapProperties:
                 bbox['max_lon'] += expansion
                 logger.info(f"Expanded bounding box to: {bbox}")
             
-            # Create a comprehensive Overpass query for the bounding box
+            # Determine the best approach based on area size
+            area_size = lat_range * lon_range
+            
+            if area_size > 0.01:  # Large area (county level)
+                logger.info(f"Large area detected ({area_size:.4f}), using targeted sampling approach")
+                properties = self._fetch_large_area_properties(bbox)
+            elif area_size > 0.001:  # Medium area (city level)
+                logger.info(f"Medium area detected ({area_size:.6f}), using standard approach")
+                properties = self._fetch_standard_properties(bbox)
+            else:  # Small area (neighborhood level)
+                logger.info(f"Small area detected ({area_size:.8f}), using comprehensive approach")
+                properties = self._fetch_comprehensive_properties(bbox)
+            
+            logger.info(f"Found {len(properties)} properties in bounding box")
+            
+            # If no properties found, try a broader search
+            if len(properties) == 0:
+                logger.info("No properties found, trying broader search...")
+                properties = self._try_broader_search(bbox)
+                    
+        except Exception as e:
+            logger.error(f"Error fetching properties: {e}")
+            # Try fallback method
+            properties = self._try_broader_search(bbox)
+        
+        return properties
+    
+    def _fetch_comprehensive_properties(self, bbox: Dict) -> List[Dict]:
+        """Fetch properties using comprehensive query for small areas"""
+        try:
+            # For small areas, we can do a comprehensive search
             query = f"""
-            [out:json][timeout:60];
+            [out:json][timeout:30];
             (
               way["building"]({bbox['min_lat']},{bbox['min_lon']},{bbox['max_lat']},{bbox['max_lon']});
               node["building"]({bbox['min_lat']},{bbox['min_lon']},{bbox['max_lat']},{bbox['max_lon']});
               way["landuse"="residential"]({bbox['min_lat']},{bbox['min_lon']},{bbox['max_lat']},{bbox['max_lon']});
               way["amenity"="house"]({bbox['min_lat']},{bbox['min_lon']},{bbox['max_lat']},{bbox['max_lon']});
               node["amenity"="house"]({bbox['min_lat']},{bbox['min_lon']},{bbox['max_lat']},{bbox['max_lon']});
+              way["building"="house"]({bbox['min_lat']},{bbox['min_lon']},{bbox['max_lat']},{bbox['max_lon']});
+              way["building"="residential"]({bbox['min_lat']},{bbox['min_lon']},{bbox['max_lat']},{bbox['max_lon']});
+              way["building"="apartments"]({bbox['min_lat']},{bbox['min_lon']},{bbox['max_lat']},{bbox['max_lon']});
+              way["building"="detached"]({bbox['min_lat']},{bbox['min_lon']},{bbox['max_lat']},{bbox['max_lon']});
+              way["building"="yes"]({bbox['min_lat']},{bbox['min_lon']},{bbox['max_lat']},{bbox['max_lon']});
             );
-            out body;
-            >;
-            out skel qt;
+            out center;
             """
             
-            logger.info(f"Querying Overpass API with bounding box: {bbox}")
+            logger.info(f"Using comprehensive query for small area")
             
-            # Use Overpass API
             url = "https://overpass-api.de/api/interpreter"
-            response = requests.post(url, data=query, timeout=60)
+            response = requests.post(url, data=query, timeout=30)
             
             if response.status_code == 200:
                 data = response.json()
-                properties = self._parse_overpass_response(data)
-                logger.info(f"Found {len(properties)} properties in bounding box")
-                
-                # If no properties found, try a broader search
-                if len(properties) == 0:
-                    logger.info("No properties found, trying broader search...")
-                    properties = self._try_broader_search(bbox)
-                    
+                return self._parse_overpass_response(data)
             else:
-                logger.warning(f"Overpass API returned status {response.status_code}")
-                logger.warning(f"Response: {response.text[:200]}")
+                logger.warning(f"Comprehensive query failed with status {response.status_code}")
+                return []
                 
         except Exception as e:
-            logger.error(f"Error fetching properties: {e}")
-            # Try fallback method
-            properties = self._try_broader_search(bbox)
+            logger.error(f"Error in comprehensive property fetch: {e}")
+            return []
+    
+    def _fetch_standard_properties(self, bbox: Dict) -> List[Dict]:
+        """Fetch properties using standard Overpass query for smaller areas"""
+        try:
+            # Create a targeted query for smaller areas
+            query = f"""
+            [out:json][timeout:30];
+            (
+              way["building"="house"]({bbox['min_lat']},{bbox['min_lon']},{bbox['max_lat']},{bbox['max_lon']});
+              way["building"="residential"]({bbox['min_lat']},{bbox['min_lon']},{bbox['max_lat']},{bbox['max_lon']});
+              way["building"="apartments"]({bbox['min_lat']},{bbox['min_lon']},{bbox['max_lat']},{bbox['max_lon']});
+              way["building"="detached"]({bbox['min_lat']},{bbox['min_lon']},{bbox['max_lat']},{bbox['max_lon']});
+            );
+            out center;
+            """
+            
+            logger.info(f"Using standard query for smaller area")
+            
+            url = "https://overpass-api.de/api/interpreter"
+            response = requests.post(url, data=query, timeout=30)
+            
+            if response.status_code == 200:
+                data = response.json()
+                return self._parse_overpass_response(data)
+            else:
+                logger.warning(f"Standard query failed with status {response.status_code}")
+                return []
+                
+        except Exception as e:
+            logger.error(f"Error in standard property fetch: {e}")
+            return []
+    
+    def _fetch_large_area_properties(self, bbox: Dict) -> List[Dict]:
+        """Fetch properties from large areas using intelligent sampling approach"""
+        properties = []
+        
+        try:
+            # Calculate area dimensions
+            lat_range = bbox['max_lat'] - bbox['min_lat']
+            lon_range = bbox['max_lon'] - bbox['min_lon']
+            
+            # Determine optimal chunk size based on area
+            if lat_range > 0.5 or lon_range > 0.5:  # Very large area
+                chunk_count = 6  # 6x6 = 36 chunks
+                logger.info(f"Very large area detected, using {chunk_count}x{chunk_count} chunks")
+            elif lat_range > 0.2 or lon_range > 0.2:  # Large area
+                chunk_count = 4  # 4x4 = 16 chunks
+                logger.info(f"Large area detected, using {chunk_count}x{chunk_count} chunks")
+            else:  # Medium-large area
+                chunk_count = 3  # 3x3 = 9 chunks
+                logger.info(f"Medium-large area detected, using {chunk_count}x{chunk_count} chunks")
+            
+            # Calculate chunk sizes
+            lat_step = lat_range / chunk_count
+            lon_step = lon_range / chunk_count
+            
+            logger.info(f"Dividing area into {chunk_count}x{chunk_count} chunks of size {lat_step:.4f}x{lon_step:.4f}")
+            
+            # Sample from different parts of the area
+            for i in range(chunk_count):
+                for j in range(chunk_count):
+                    chunk_bbox = {
+                        'min_lat': bbox['min_lat'] + i * lat_step,
+                        'max_lat': bbox['min_lat'] + (i + 1) * lat_step,
+                        'min_lon': bbox['min_lon'] + j * lon_step,
+                        'max_lon': bbox['min_lon'] + (j + 1) * lon_step
+                    }
+                    
+                    try:
+                        # Use different query strategies for different chunk types
+                        if i == 0 and j == 0:  # First chunk - comprehensive
+                            query = f"""
+                            [out:json][timeout:20];
+                            (
+                              way["building"="house"]({chunk_bbox['min_lat']},{chunk_bbox['min_lon']},{chunk_bbox['max_lat']},{chunk_bbox['max_lon']});
+                              way["building"="residential"]({chunk_bbox['min_lat']},{chunk_bbox['min_lon']},{chunk_bbox['max_lat']},{chunk_bbox['max_lon']});
+                              way["building"="apartments"]({chunk_bbox['min_lat']},{chunk_bbox['min_lon']},{chunk_bbox['max_lat']},{chunk_bbox['max_lon']});
+                            );
+                            out center;
+                            """
+                        else:  # Other chunks - focused on houses
+                            query = f"""
+                            [out:json][timeout:15];
+                            way["building"="house"]({chunk_bbox['min_lat']},{chunk_bbox['min_lon']},{chunk_bbox['max_lat']},{chunk_bbox['max_lon']});
+                            out center;
+                            """
+                        
+                        url = "https://overpass-api.de/api/interpreter"
+                        response = requests.post(url, data=query, timeout=20)
+                        
+                        if response.status_code == 200:
+                            data = response.json()
+                            chunk_properties = self._parse_overpass_response(data)
+                            properties.extend(chunk_properties)
+                            logger.info(f"Chunk {i},{j}: Found {len(chunk_properties)} properties")
+                        else:
+                            logger.warning(f"Chunk {i},{j} failed with status {response.status_code}")
+                        
+                        # Rate limiting between chunks
+                        time.sleep(0.5)
+                        
+                    except Exception as e:
+                        logger.warning(f"Error in chunk {i},{j}: {e}")
+                        continue
+            
+            logger.info(f"Large area sampling found {len(properties)} total properties")
+            
+        except Exception as e:
+            logger.error(f"Error in large area property fetch: {e}")
         
         return properties
     
@@ -241,25 +374,18 @@ class OpenStreetMapProperties:
             
             logger.info(f"Trying broader search with expanded bbox: {expanded_bbox}")
             
-            # Simpler query for broader area
-            query = f"""
-            [out:json][timeout:60];
-            (
-              way["building"]({expanded_bbox['min_lat']},{expanded_bbox['min_lon']},{expanded_bbox['max_lat']},{expanded_bbox['max_lon']});
-              node["building"]({expanded_bbox['min_lat']},{expanded_bbox['min_lon']},{expanded_bbox['max_lat']},{expanded_bbox['max_lon']});
-            );
-            out body;
-            >;
-            out skel qt;
-            """
+            # Use the same efficient approach for broader search
+            lat_range = expanded_bbox['max_lat'] - expanded_bbox['min_lat']
+            lon_range = expanded_bbox['max_lon'] - expanded_bbox['min_lon']
             
-            url = "https://overpass-api.de/api/interpreter"
-            response = requests.post(url, data=query, timeout=60)
+            if lat_range > 0.1 or lon_range > 0.1:
+                logger.info("Broader search using large area approach")
+                properties = self._fetch_large_area_properties(expanded_bbox)
+            else:
+                logger.info("Broader search using standard approach")
+                properties = self._fetch_standard_properties(expanded_bbox)
             
-            if response.status_code == 200:
-                data = response.json()
-                properties = self._parse_overpass_response(data)
-                logger.info(f"Broader search found {len(properties)} properties")
+            logger.info(f"Broader search found {len(properties)} properties")
             
         except Exception as e:
             logger.error(f"Error in broader search: {e}")
@@ -321,16 +447,18 @@ class OpenStreetMapProperties:
                         # Get coordinates - try multiple methods
                         coordinates_found = False
                         
+                        # For ways with center (from out center)
                         if element_type == 'way' and 'center' in element:
                             prop['latitude'] = element['center']['lat']
                             prop['longitude'] = element['center']['lon']
                             coordinates_found = True
+                        # For nodes with direct lat/lon
                         elif 'lat' in element and 'lon' in element:
                             prop['latitude'] = element['lat']
                             prop['longitude'] = element['lon']
                             coordinates_found = True
+                        # For ways without center, try to calculate from bounds
                         elif element_type == 'way' and 'bounds' in element:
-                            # For ways without center, use bounds center
                             bounds = element['bounds']
                             prop['latitude'] = (bounds['minlat'] + bounds['maxlat']) / 2
                             prop['longitude'] = (bounds['minlon'] + bounds['maxlon']) / 2
@@ -428,6 +556,11 @@ class OpenStreetMapProperties:
             
             if not properties:
                 logger.warning(f"No properties found for {county_name}, {state_name}")
+                # Try alternative approaches
+                properties = self._try_alternative_approaches(county_name, state_name, bbox)
+            
+            if not properties:
+                logger.error(f"All property fetching methods failed for {county_name}, {state_name}")
                 return pd.DataFrame()
             
             # Limit properties if too many
@@ -450,6 +583,96 @@ class OpenStreetMapProperties:
         except Exception as e:
             logger.error(f"Error getting county properties: {e}")
             return pd.DataFrame()
+    
+    def _try_alternative_approaches(self, county_name: str, state_name: str, original_bbox: Dict) -> List[Dict]:
+        """Try alternative approaches when the main method fails"""
+        logger.info(f"Trying alternative approaches for {county_name}, {state_name}")
+        
+        # Try 1: Broader search area
+        try:
+            logger.info("Alternative 1: Broader search area")
+            expanded_bbox = {
+                'min_lat': original_bbox['min_lat'] - 0.1,
+                'max_lat': original_bbox['max_lat'] + 0.1,
+                'min_lon': original_bbox['min_lon'] - 0.1,
+                'max_lon': original_bbox['max_lon'] + 0.1
+            }
+            properties = self._fetch_standard_properties(expanded_bbox)
+            if properties:
+                logger.info(f"Alternative 1 successful: found {len(properties)} properties")
+                return properties
+        except Exception as e:
+            logger.debug(f"Alternative 1 failed: {e}")
+        
+        # Try 2: Focus on major cities in the county
+        try:
+            logger.info("Alternative 2: Focus on major cities")
+            properties = self._search_major_cities_in_county(county_name, state_name)
+            if properties:
+                logger.info(f"Alternative 2 successful: found {len(properties)} properties")
+                return properties
+        except Exception as e:
+            logger.debug(f"Alternative 2 failed: {e}")
+        
+        # Try 3: Use state center with very broad search
+        try:
+            logger.info("Alternative 3: State center broad search")
+            state_bbox = self._get_state_based_fallback(state_name)
+            # Expand state bbox significantly
+            state_bbox['min_lat'] -= 0.2
+            state_bbox['max_lat'] += 0.2
+            state_bbox['min_lon'] -= 0.2
+            state_bbox['max_lon'] += 0.2
+            properties = self._fetch_standard_properties(state_bbox)
+            if properties:
+                logger.info(f"Alternative 3 successful: found {len(properties)} properties")
+                return properties
+        except Exception as e:
+            logger.debug(f"Alternative 3 failed: {e}")
+        
+        logger.warning("All alternative approaches failed")
+        return []
+    
+    def _search_major_cities_in_county(self, county_name: str, state_name: str) -> List[Dict]:
+        """Search for properties in major cities within the county"""
+        properties = []
+        
+        # Common major cities that might be in the county
+        major_cities = [
+            f"{county_name} City",
+            f"{county_name} Town",
+            f"{county_name} Village"
+        ]
+        
+        for city_name in major_cities:
+            try:
+                # Try to geocode the city
+                location = self.geolocator.geocode(f"{city_name}, {state_name}, USA", timeout=10)
+                if location:
+                    # Create a small bounding box around the city
+                    city_bbox = {
+                        'min_lat': location.latitude - 0.05,
+                        'max_lat': location.latitude + 0.05,
+                        'min_lon': location.longitude - 0.05,
+                        'max_lon': location.longitude + 0.05,
+                        'center_lat': location.latitude,
+                        'center_lon': location.longitude
+                    }
+                    
+                    # Search for properties in the city
+                    city_properties = self._fetch_comprehensive_properties(city_bbox)
+                    properties.extend(city_properties)
+                    
+                    if city_properties:
+                        logger.info(f"Found {len(city_properties)} properties in {city_name}")
+                    
+                    time.sleep(1)  # Rate limiting
+                    
+            except Exception as e:
+                logger.debug(f"City search failed for {city_name}: {e}")
+                continue
+        
+        return properties
     
     def _load_from_cache(self, key: str) -> Optional[pd.DataFrame]:
         """Load data from cache"""

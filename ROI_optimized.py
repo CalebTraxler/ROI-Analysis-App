@@ -349,20 +349,21 @@ def load_area_data_optimized(state, county, network_available=True):
 
 # Robust fallback map with OpenStreetMap background
 def create_robust_fallback_map(data, properties_df=None):
-    """Create a map with guaranteed OpenStreetMap background and optional property overlay"""
+    """Create a robust fallback map that works reliably"""
     if len(data) == 0:
         return None
     
     # Filter out rows with missing coordinates
     valid_data = data.dropna(subset=['Latitude', 'Longitude'])
     if len(valid_data) == 0:
+        st.warning("No valid coordinates found for visualization")
         return None
     
     # Calculate view state
     center_lat = valid_data['Latitude'].mean()
     center_lon = valid_data['Longitude'].mean()
     
-    # Calculate zoom level
+    # Calculate appropriate zoom level
     lat_range = valid_data['Latitude'].max() - valid_data['Latitude'].min()
     lon_range = valid_data['Longitude'].max() - valid_data['Longitude'].min()
     max_range = max(lat_range, lon_range)
@@ -380,14 +381,14 @@ def create_robust_fallback_map(data, properties_df=None):
         bearing=0
     )
 
-    # Create simple scatter plot with better visibility
+    # Create ROI scatter plot
     scatter_data = valid_data.copy()
     scatter_data['tooltip_text'] = scatter_data.apply(
         lambda row: f"{row['RegionName']}<br/>${row['Current_Value']:,.0f}<br/>ROI: {row['ROI']:.1f}%",
         axis=1
     )
     
-    # Color by ROI with better contrast
+    # Color scale based on ROI
     min_roi = scatter_data['ROI'].min()
     max_roi = scatter_data['ROI'].max()
     
@@ -397,156 +398,75 @@ def create_robust_fallback_map(data, properties_df=None):
         else:
             normalized = (roi - min_roi) / (max_roi - min_roi)
         
-        # Red to Green gradient with better visibility
         if normalized < 0.5:
-            # Red to Yellow
-            return [255, int(255 * normalized * 2), 0, 220]
+            return [255, int(255 * normalized * 2), 0, 200]
         else:
-            # Yellow to Green
-            return [int(255 * (1 - (normalized - 0.5) * 2)), 255, 0, 220]
+            return [int(255 * (1 - (normalized - 0.5) * 2)), 255, 0, 200]
     
     scatter_data['color'] = scatter_data['ROI'].apply(get_color_by_roi)
-    
-    # Create heatmap layer with exponential weighting (proven working method)
-    scatter_data['weighted_roi'] = np.exp(scatter_data['ROI'] / 50) - 1  # Exponential scaling
-    
-    # Create heatmap layer
-    heatmap_layer = pdk.Layer(
-        'HeatmapLayer',
-        scatter_data,
-        get_position=['Longitude', 'Latitude'],
-        get_weight='weighted_roi',
-        radiusPixels=60,
-        intensity=2,
-        threshold=0.02,
-        colorRange=[
-            [255, 255, 178, 100],  # Light yellow (low ROI)
-            [254, 204, 92, 150],   # Yellow
-            [253, 141, 60, 200],   # Orange
-            [240, 59, 32, 250],    # Red-Orange
-            [189, 0, 38, 255]      # Deep Red (high ROI)
-        ],
-        pickable=False
-    )
-    
-    # Create scatter layer with better visibility
-    scatter_layer = pdk.Layer(
-        'ScatterplotLayer',
-        scatter_data,
-        get_position=['Longitude', 'Latitude'],
-        get_radius=30,  # Smaller radius for individual points
-        get_fill_color='color',
-        get_line_color=[255, 255, 255, 200],
-        pickable=True,
-        opacity=0.8,
-        stroked=True,
-        filled=True,
-        line_width_min_pixels=2,
-        radius_scale=1
-    )
-    
-    # Create coordinate grid lines for better orientation
-    grid_data = []
-    lat_min, lat_max = valid_data['Latitude'].min(), valid_data['Latitude'].max()
-    lon_min, lon_max = valid_data['Longitude'].min(), valid_data['Longitude'].max()
-    
-    # Add latitude lines
-    for lat in np.linspace(lat_min, lat_max, 5):
-        grid_data.append({
-            'path': [[lon_min, lat], [lon_max, lat]],
-            'type': 'lat'
-        })
-    
-    # Add longitude lines
-    for lon in np.linspace(lon_min, lon_max, 5):
-        grid_data.append({
-            'path': [[lon, lat_min], [lon, lat_max]],
-            'type': 'lon'
-        })
-    
-    # Create grid layer
-    grid_layer = pdk.Layer(
-        'PathLayer',
-        grid_data,
-        get_path='path',
-        get_color='[200, 200, 200, 100]',
-        get_width=1,
-        pickable=False
-    )
+
+    # Create base layers
+    layers = [
+        pdk.Layer(
+            'ScatterplotLayer',
+            scatter_data,
+            get_position=['Longitude', 'Latitude'],
+            get_radius=30,
+            get_fill_color='color',
+            get_line_color=[255, 255, 255, 150],
+            pickable=True,
+            opacity=0.8,
+            stroked=True,
+            filled=True,
+            line_width_min_pixels=2,
+            radius_scale=1
+        )
+    ]
     
     # Add properties layer if available
-    all_layers = [grid_layer, heatmap_layer, scatter_layer]
     if properties_df is not None and not properties_df.empty:
         valid_properties = properties_df[properties_df['latitude'].notna() & properties_df['longitude'].notna()].copy()
         
         if len(valid_properties) > 0:
-            # Prepare properties data with tooltips
-            properties_with_tooltips = valid_properties.copy()
-            properties_with_tooltips['tooltip_text'] = properties_with_tooltips.apply(
-                lambda row: f"<b>Property Details</b><br/>"
-                           f"Type: {row.get('building_type', 'N/A')}<br/>"
-                           f"Address: {row.get('address', {}).get('street', 'N/A')} {row.get('address', {}).get('housenumber', '')}<br/>"
-                           f"Estimated Value: ${row.get('estimated_value', 0):,.0f}<br/>"
-                           f"OSM ID: {row.get('osm_id', 'N/A')}",
-                axis=1
-            )
+            logger.info(f"Fallback map: Adding {len(valid_properties)} properties")
             
+            # Create properties layer
             properties_layer = pdk.Layer(
                 'ScatterplotLayer',
-                properties_with_tooltips,
+                valid_properties,
                 get_position=['longitude', 'latitude'],
-                get_radius=8,
+                get_radius=10,
                 get_fill_color=[0, 100, 200, 180],
                 get_line_color=[255, 255, 255, 150],
                 pickable=True,
                 opacity=0.7,
                 stroked=True,
                 filled=True,
-                line_width_min_pixels=1
+                line_width_min_pixels=1,
+                radius_scale=1
             )
-            all_layers.append(properties_layer)
+            
+            layers.append(properties_layer)
     
-    # Try to create deck with OpenStreetMap style
-    try:
-        deck = pdk.Deck(
-            layers=all_layers,  # Include all layers including properties
-            initial_view_state=view_state,
-            map_style='https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',
-            tooltip={
-                "html": "<b>{tooltip_text}</b>",
-                "style": {
-                    "backgroundColor": "rgba(0, 0, 0, 0.8)",
-                    "color": "white",
-                    "padding": "10px",
-                    "borderRadius": "5px"
-                }
-            },
-            height=600
-        )
-        return deck
-    except Exception as e:
-        logger.warning(f"Failed to create map with CartoDB style: {e}")
-        
-        # Final fallback: no map style but with coordinate grid
-        try:
-            deck = pdk.Deck(
-                layers=all_layers,  # Include all layers including properties
-                initial_view_state=view_state,
-                tooltip={
-                    "html": "<b>{tooltip_text}</b>",
-                    "style": {
-                        "backgroundColor": "rgba(0, 0, 0, 0.8)",
-                        "color": "white",
-                        "padding": "10px",
-                        "borderRadius": "5px"
-                    }
-                },
-                height=600
-            )
-            return deck
-        except Exception as e2:
-            logger.error(f"Failed to create any map: {e2}")
-            return None
+    # Use a reliable map style
+    deck = pdk.Deck(
+        layers=layers,
+        initial_view_state=view_state,
+        map_style='https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',
+        tooltip={
+            "html": "<b>{tooltip_text}</b>",
+            "style": {
+                "backgroundColor": "rgba(0, 0, 0, 0.8)",
+                "color": "white",
+                "padding": "10px",
+                "borderRadius": "5px",
+                "fontSize": "12px"
+            }
+        },
+        height=600
+    )
+    
+    return deck
 
 # Enhanced 3D map creation with guaranteed background display
 def create_3d_roi_map_optimized(data, use_satellite=False, properties_df=None):
@@ -652,6 +572,8 @@ def create_3d_roi_map_optimized(data, use_satellite=False, properties_df=None):
         valid_properties = properties_df[properties_df['latitude'].notna() & properties_df['longitude'].notna()].copy()
         
         if len(valid_properties) > 0:
+            logger.info(f"Adding {len(valid_properties)} properties to map")
+            
             # Prepare properties data with tooltips
             properties_with_tooltips = valid_properties.copy()
             properties_with_tooltips['tooltip_text'] = properties_with_tooltips.apply(
@@ -663,24 +585,25 @@ def create_3d_roi_map_optimized(data, use_satellite=False, properties_df=None):
                 axis=1
             )
             
-            # Create properties layer with smaller radius for individual houses
+            # Create properties layer with better visibility
             properties_layer = pdk.Layer(
                 'ScatterplotLayer',
                 properties_with_tooltips,
                 get_position=['longitude', 'latitude'],
-                get_radius=8,  # Small radius for individual properties
-                get_fill_color=[0, 100, 200, 180],  # Blue color for properties
-                get_line_color=[255, 255, 255, 150],
+                get_radius=12,  # Slightly larger radius for better visibility
+                get_fill_color=[0, 100, 200, 200],  # More opaque blue for properties
+                get_line_color=[255, 255, 255, 200],
                 pickable=True,
-                opacity=0.7,
+                opacity=0.8,
                 stroked=True,
                 filled=True,
-                line_width_min_pixels=1,
+                line_width_min_pixels=2,
                 radius_scale=1
             )
             
             # Add properties layer on top
             layers.append(properties_layer)
+            logger.info(f"Properties layer added with {len(valid_properties)} properties")
             
             # Update tooltip to show both ROI and property info
             scatter_data['tooltip_text'] = scatter_data.apply(
@@ -690,6 +613,10 @@ def create_3d_roi_map_optimized(data, use_satellite=False, properties_df=None):
                            f"<i>Zoom in to see individual properties</i>",
                 axis=1
             )
+        else:
+            logger.warning("No valid properties with coordinates found")
+    else:
+        logger.info("No properties data provided for map overlay")
 
     # FORCE OpenStreetMap tiles - this should work on Streamlit Cloud
     try:
@@ -790,6 +717,358 @@ def create_3d_roi_map_optimized(data, use_satellite=False, properties_df=None):
         
         return deck
 
+# Add property interaction functionality to the existing map
+def create_3d_roi_map_with_properties(data, use_satellite=False, properties_df=None, zoom_level=10):
+    """Enhanced map creation with OpenStreetMap property overlay and click interaction"""
+    if len(data) == 0:
+        return None
+    
+    # Filter out rows with missing coordinates
+    valid_data = data.dropna(subset=['Latitude', 'Longitude'])
+    if len(valid_data) == 0:
+        st.warning("No valid coordinates found for visualization")
+        return None
+    
+    # Calculate view state with better defaults
+    center_lat = valid_data['Latitude'].mean()
+    center_lon = valid_data['Longitude'].mean()
+    
+    # Calculate appropriate zoom level
+    lat_range = valid_data['Latitude'].max() - valid_data['Latitude'].min()
+    lon_range = valid_data['Longitude'].max() - valid_data['Longitude'].min()
+    max_range = max(lat_range, lon_range)
+    
+    if max_range > 0:
+        zoom = max(8, min(15, 20 / max_range))
+    else:
+        zoom = 10
+    
+    # Override with user-selected zoom level if provided
+    if zoom_level:
+        zoom = zoom_level
+    
+    view_state = pdk.ViewState(
+        latitude=center_lat,
+        longitude=center_lon,
+        zoom=zoom,
+        pitch=0,  # Changed to 0 for better compatibility
+        bearing=0
+    )
+
+    # Format the data and create color scale based on ROI
+    scatter_data = valid_data.copy()
+    scatter_data['tooltip_text'] = scatter_data.apply(
+        lambda row: f"{row['RegionName']}<br/>${row['Current_Value']:,.0f}<br/>ROI: {row['ROI']:.1f}%",
+        axis=1
+    )
+    
+    min_roi = scatter_data['ROI'].min()
+    max_roi = scatter_data['ROI'].max()
+    
+    def get_color_by_roi(roi):
+        # Normalize ROI to 0-1 scale
+        if max_roi == min_roi:
+            normalized = 0.5
+        else:
+            normalized = (roi - min_roi) / (max_roi - min_roi)
+        
+        # Create color gradient from red (low) to green (high)
+        if normalized < 0.5:
+            # Red to Yellow
+            return [255, int(255 * normalized * 2), 0, 200]
+        else:
+            # Yellow to Green
+            return [int(255 * (1 - (normalized - 0.5) * 2)), 255, 0, 200]
+    
+    scatter_data['color'] = scatter_data['ROI'].apply(get_color_by_roi)
+
+    # Create heatmap layer with exponential weighting for ROI (proven working method)
+    scatter_data['weighted_roi'] = np.exp(scatter_data['ROI'] / 50) - 1  # Exponential scaling for better heat intensity
+    
+    # Create base layers
+    layers = [
+        pdk.Layer(
+            'HeatmapLayer',
+            scatter_data,
+            get_position=['Longitude', 'Latitude'],
+            get_weight='weighted_roi',  # Use exponential weighting
+            radiusPixels=60,  # Smaller radius for sharper heat spots
+            intensity=2,
+            threshold=0.02,  # Lower threshold for more sensitive detection
+            colorRange=[
+                [255, 255, 178, 100],  # Light yellow (low ROI)
+                [254, 204, 92, 150],   # Yellow
+                [253, 141, 60, 200],   # Orange
+                [240, 59, 32, 250],    # Red-Orange
+                [189, 0, 38, 255]      # Deep Red (high ROI)
+            ],
+            pickable=False
+        ),
+        pdk.Layer(
+            'ScatterplotLayer',
+            scatter_data,
+            get_position=['Longitude', 'Latitude'],
+            get_radius=30,  # Smaller radius for individual points
+            get_fill_color='color',
+            get_line_color=[255, 255, 255, 150],
+            pickable=True,
+            opacity=0.8,
+            stroked=True,
+            filled=True,
+            line_width_min_pixels=2,
+            radius_scale=1
+        )
+    ]
+    
+    # Add properties layer only if zoomed in enough and properties available
+    if properties_df is not None and not properties_df.empty and zoom >= 12:
+        valid_properties = properties_df[
+            (properties_df['latitude'].notna()) & 
+            (properties_df['longitude'].notna())
+        ].copy()
+        
+        if len(valid_properties) > 0:
+            logger.info(f"Adding {len(valid_properties)} properties to map (zoom level: {zoom})")
+            
+            # Prepare properties data with enhanced tooltips
+            properties_with_tooltips = valid_properties.copy()
+            properties_with_tooltips['tooltip_text'] = properties_with_tooltips.apply(
+                lambda row: f"<b>🏠 Property</b><br/>"
+                           f"Type: {row.get('building_type', 'N/A')}<br/>"
+                           f"Address: {row.get('address', {}).get('street', 'N/A')} {row.get('address', {}).get('housenumber', '')}<br/>"
+                           f"Estimated Value: ${row.get('estimated_value', 0):,.0f}<br/>"
+                           f"<i>Click for detailed information</i>",
+                axis=1
+            )
+            
+            # Create properties layer with click interaction
+            properties_layer = pdk.Layer(
+                'ScatterplotLayer',
+                properties_with_tooltips,
+                get_position=['longitude', 'latitude'],
+                get_radius=12,  # Slightly larger radius for better visibility
+                get_fill_color=[0, 100, 200, 200],  # More opaque blue for properties
+                get_line_color=[255, 255, 255, 200],
+                pickable=True,
+                opacity=0.8,
+                stroked=True,
+                filled=True,
+                line_width_min_pixels=2,
+                radius_scale=1
+            )
+            
+            # Add properties layer on top
+            layers.append(properties_layer)
+            logger.info(f"Properties layer added with {len(valid_properties)} properties")
+            
+            # Update neighborhood tooltips to mention properties
+            scatter_data['tooltip_text'] = scatter_data.apply(
+                lambda row: f"<b>Neighborhood: {row['RegionName']}</b><br/>"
+                           f"ROI: {row['ROI']:.1f}%<br/>"
+                           f"Value: ${row['Current_Value']:,.0f}<br/>"
+                           f"<i>Zoom in to level 12+ to see individual properties</i>",
+                axis=1
+            )
+        else:
+            logger.warning("No valid properties with coordinates found")
+    else:
+        logger.info(f"Properties not shown at zoom level {zoom} (requires zoom >= 12)")
+
+    # FORCE OpenStreetMap tiles - this should work on Streamlit Cloud
+    try:
+        # Create a custom map style that forces OpenStreetMap tiles
+        custom_map_style = {
+            "version": 8,
+            "sources": {
+                "osm": {
+                    "type": "raster",
+                    "tiles": ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
+                    "tileSize": 256,
+                    "attribution": "© OpenStreetMap contributors"
+                }
+            },
+            "layers": [
+                {
+                    "id": "osm-tiles",
+                    "type": "raster",
+                    "source": "osm",
+                    "minzoom": 0,
+                    "maxzoom": 18
+                }
+            ]
+        }
+        
+        deck = pdk.Deck(
+            layers=layers,
+            initial_view_state=view_state,
+            map_style=custom_map_style,
+            tooltip={
+                "html": "<b>{tooltip_text}</b>",
+                "style": {
+                    "backgroundColor": "rgba(0, 0, 0, 0.8)",
+                    "color": "white",
+                    "padding": "10px",
+                    "borderRadius": "5px",
+                    "fontSize": "12px"
+                }
+            },
+            height=600
+        )
+        logger.info("Successfully created map with custom OpenStreetMap tiles")
+        return deck
+        
+    except Exception as e:
+        logger.warning(f"Custom OpenStreetMap tiles failed: {e}")
+        
+        # Try multiple map styles to ensure one works
+        map_styles = [
+            'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',  # CartoDB light (most reliable)
+            'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',  # CartoDB dark
+            'mapbox://styles/mapbox/light-v9',      # Light style
+            'mapbox://styles/mapbox/streets-v11',   # Streets style
+            'mapbox://styles/mapbox/outdoors-v11',  # Outdoors style
+            None  # No style (just layers)
+        ]
+        
+        for map_style in map_styles:
+            try:
+                deck = pdk.Deck(
+                    layers=layers,
+                    initial_view_state=view_state,
+                    map_style=map_style,
+                    tooltip={
+                        "html": "<b>{tooltip_text}</b>",
+                        "style": {
+                            "backgroundColor": "rgba(0, 0, 0, 0.8)",
+                            "color": "white",
+                            "padding": "10px",
+                            "borderRadius": "5px",
+                            "fontSize": "12px"
+                        }
+                    },
+                    height=600
+                )
+                logger.info(f"Successfully created map with style: {map_style}")
+                return deck
+            except Exception as e:
+                logger.warning(f"Failed to create map with style {map_style}: {e}")
+                continue
+        
+        # If all map styles fail, create a simple layer-only visualization
+        logger.info("Creating fallback visualization without base map")
+        deck = pdk.Deck(
+            layers=layers,
+            initial_view_state=view_state,
+            tooltip={
+                "html": "<b>{tooltip_text}</b>",
+                "style": {
+                    "backgroundColor": "rgba(0, 0, 0, 0.8)",
+                    "color": "white",
+                    "padding": "10px",
+                    "borderRadius": "5px"
+                }
+            },
+            height=600
+        )
+        
+        return deck
+
+def create_property_details_panel(clicked_property):
+    """Create a detailed property information panel"""
+    if not clicked_property:
+        return
+    
+    # Create an expander for property details
+    with st.expander("🏠 Property Details", expanded=True):
+        # Extract property information
+        osm_id = clicked_property.get('osm_id', 'N/A')
+        building_type = clicked_property.get('building_type', 'N/A')
+        address = clicked_property.get('address', {})
+        
+        # Create columns for better layout
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("**Basic Information**")
+            st.markdown(f"**OSM ID:** `{osm_id}`")
+            st.markdown(f"**Building Type:** {building_type}")
+            
+            # Display address
+            if address:
+                st.markdown("**Address:**")
+                if address.get('housenumber'):
+                    st.markdown(f"  {address.get('housenumber')} {address.get('street', '')}")
+                if address.get('city'):
+                    st.markdown(f"  {address.get('city')}, {address.get('state', '')} {address.get('postcode', '')}")
+        
+        with col2:
+            # Display features
+            features = clicked_property.get('features', {})
+            if features:
+                st.markdown("**Property Features**")
+                if features.get('floors'):
+                    st.metric("Floors", features['floors'])
+                if features.get('units'):
+                    st.metric("Units", features['units'])
+                if features.get('year_built'):
+                    st.metric("Year Built", features['year_built'])
+                if features.get('roof_type'):
+                    st.markdown(f"**Roof:** {features['roof_type']}")
+                if features.get('material'):
+                    st.markdown(f"**Material:** {features['material']}")
+        
+        # Display estimated value in a prominent way
+        if 'estimated_value' in clicked_property:
+            st.markdown("---")
+            st.markdown(f"### 💰 Estimated Property Value: **${clicked_property['estimated_value']:,.0f}**")
+        
+        # Add action buttons
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            if st.button("📍 View on Map", help="Center map on this property"):
+                st.info("Map centering feature coming soon!")
+        
+        with col2:
+            if st.button("📊 Compare Properties", help="Compare with similar properties"):
+                st.info("Property comparison feature coming soon!")
+        
+        with col3:
+            if st.button("❌ Clear Selection"):
+                st.session_state.clicked_property = None
+                st.rerun()
+
+def create_property_selector(properties_df):
+    """Create a property selector dropdown for manual property selection"""
+    if properties_df is None or properties_df.empty:
+        return
+    
+    st.sidebar.markdown("## 🔍 Property Selector")
+    
+    # Create a searchable property list
+    valid_properties = properties_df[properties_df['latitude'].notna() & properties_df['longitude'].notna()]
+    
+    if len(valid_properties) > 0:
+        # Create property labels for the dropdown
+        valid_properties['property_label'] = valid_properties.apply(
+            lambda row: f"{row.get('address', {}).get('housenumber', '')} {row.get('address', {}).get('street', '')} - {row.get('building_type', 'N/A')}",
+            axis=1
+        )
+        
+        # Remove duplicates and sort
+        unique_properties = valid_properties.drop_duplicates(subset=['property_label']).sort_values('property_label')
+        
+        selected_property_label = st.sidebar.selectbox(
+            "Select a property to view details:",
+            options=unique_properties['property_label'],
+            index=None,
+            help="Choose a property from the dropdown to view detailed information"
+        )
+        
+        if selected_property_label:
+            selected_property = unique_properties[unique_properties['property_label'] == selected_property_label].iloc[0]
+            st.session_state.clicked_property = selected_property.to_dict()
+            st.rerun()
+
 def create_properties_map(properties_df):
     """Create a map visualization for OpenStreetMap properties"""
     try:
@@ -857,6 +1136,10 @@ def create_properties_map(properties_df):
 
 # Main app section with performance optimizations
 def main():
+    # Initialize session state for clicked properties
+    if 'clicked_property' not in st.session_state:
+        st.session_state.clicked_property = None
+    
     # Initialize cache database
     setup_coordinates_cache()
     
@@ -901,6 +1184,24 @@ def main():
         # Map style options
         st.sidebar.markdown("### Visualization Options")
         use_satellite = st.sidebar.checkbox("Satellite view", help="Use satellite imagery as base map (requires network)")
+        
+        # Property loading options
+        st.sidebar.markdown("### 🏠 Property Data Options")
+        load_properties = st.sidebar.checkbox("Enable Property Loading", value=True,
+                                            help="Load OpenStreetMap property data when zoomed in")
+        
+        if load_properties:
+            zoom_level = st.sidebar.slider("Zoom Level for Properties", min_value=8, max_value=18, value=12,
+                                         help="Properties become visible at zoom level 12+")
+            max_properties = st.sidebar.slider("Max Properties", min_value=100, max_value=10000, value=2000,
+                                             help="Maximum properties to load")
+            
+            property_types = st.sidebar.multiselect(
+                "Property Types to Show",
+                options=['house', 'residential', 'apartments', 'detached', 'semi-detached'],
+                default=['house', 'residential'],
+                help="Select which types of properties to display"
+            )
         
         # Progress indicator with professional UX
         if selected_state and selected_county:            
@@ -972,11 +1273,23 @@ def main():
                             with st.spinner('Loading property data for map overlay...'):
                                 try:
                                     osm_fetcher = OpenStreetMapProperties()
+                                    # Load properties with user-specified limits
                                     properties_df = osm_fetcher.get_county_properties(
-                                        selected_county, selected_state, max_properties=1000
+                                        selected_county, selected_state, max_properties=max_properties
                                     )
+                                    
+                                    # Filter by selected property types
+                                    if property_types and not properties_df.empty:
+                                        properties_df = properties_df[
+                                            properties_df['building_type'].isin(property_types)
+                                        ]
+                                    
                                     if not properties_df.empty:
                                         st.success(f"✅ Loaded {len(properties_df)} properties")
+                                        # Show property summary
+                                        st.info(f"📊 Property types: {properties_df['building_type'].value_counts().to_dict()}")
+                                        st.info(f"📍 Properties with coordinates: {properties_df[properties_df['latitude'].notna() & properties_df['longitude'].notna()].shape[0]}")
+                                        st.info(f"🔍 Properties visible at zoom level {zoom_level}+")
                                     else:
                                         st.warning("⚠️ No properties found for this county")
                                 except Exception as e:
@@ -984,10 +1297,11 @@ def main():
                                     properties_df = None
                         
                         # Try to create the enhanced map with properties overlay
-                        map_chart = create_3d_roi_map_optimized(data, use_satellite and network_available, properties_df)
+                        map_chart = create_3d_roi_map_with_properties(data, use_satellite and network_available, properties_df, zoom_level)
                         
                         # If enhanced map fails, try fallback map
                         if not map_chart:
+                            st.warning("⚠️ Enhanced map failed, trying fallback map...")
                             map_chart = create_robust_fallback_map(data, properties_df)
                         
                         if map_chart:
@@ -1004,12 +1318,29 @@ def main():
                                 """)
                             with col2:
                                 if properties_df is not None and not properties_df.empty:
+                                    valid_props = properties_df[properties_df['latitude'].notna() & properties_df['longitude'].notna()]
+                                    st.markdown(f"""
+                                    **Property Overlay:**
+                                    - **Blue dots**: {len(valid_props)} individual properties
+                                    - **Zoom level {zoom_level}+**: Properties become visible
+                                    - **Click properties**: View detailed information
+                                    - **Property types**: {valid_props['building_type'].value_counts().to_dict()}
+                                    """)
+                                else:
                                     st.markdown("""
                                     **Property Overlay:**
-                                    - **Blue dots**: Individual houses
-                                    - **Zoom in** to see properties clearly
-                                    - **Click properties** for details
+                                    - No properties loaded
+                                    - Enable "Load Properties" to see individual houses
                                     """)
+                            
+                            # Property details panel (if a property is clicked)
+                            if 'clicked_property' not in st.session_state:
+                                st.session_state.clicked_property = None
+                            
+                            if st.session_state.clicked_property:
+                                create_property_details_panel(st.session_state.clicked_property)
+                        else:
+                            st.error("❌ Failed to create map. Please check your data and try again.")
                     
                     # ROI Distribution with professional styling
                     st.markdown('<h3 class="section-header">ROI Performance Analysis</h3>', unsafe_allow_html=True)
@@ -1079,6 +1410,10 @@ def main():
                             file_name=f"{selected_county}_{selected_state}_roi_data.csv",
                             mime="text/csv"
                         )
+                    
+                    # Property selector in sidebar
+                    if properties_df is not None and not properties_df.empty:
+                        create_property_selector(properties_df)
                     
                     # OpenStreetMap Properties Section
                     st.markdown('<h3 class="section-header">OpenStreetMap Property Data</h3>', unsafe_allow_html=True)
