@@ -1185,24 +1185,6 @@ def main():
         st.sidebar.markdown("### Visualization Options")
         use_satellite = st.sidebar.checkbox("Satellite view", help="Use satellite imagery as base map (requires network)")
         
-        # Property loading options
-        st.sidebar.markdown("### 🏠 Property Data Options")
-        load_properties = st.sidebar.checkbox("Enable Property Loading", value=True,
-                                            help="Load OpenStreetMap property data when zoomed in")
-        
-        if load_properties:
-            zoom_level = st.sidebar.slider("Zoom Level for Properties", min_value=8, max_value=18, value=12,
-                                         help="Properties become visible at zoom level 12+")
-            max_properties = st.sidebar.slider("Max Properties", min_value=100, max_value=10000, value=2000,
-                                             help="Maximum properties to load")
-            
-            property_types = st.sidebar.multiselect(
-                "Property Types to Show",
-                options=['house', 'residential', 'apartments', 'detached', 'semi-detached'],
-                default=['house', 'residential'],
-                help="Select which types of properties to display"
-            )
-        
         # Progress indicator with professional UX
         if selected_state and selected_county:            
             with st.spinner('Loading data and generating visualization...'):
@@ -1273,23 +1255,15 @@ def main():
                             with st.spinner('Loading property data for map overlay...'):
                                 try:
                                     osm_fetcher = OpenStreetMapProperties()
-                                    # Load properties with user-specified limits
+                                    # Increase property limit to show more properties on the map
                                     properties_df = osm_fetcher.get_county_properties(
-                                        selected_county, selected_state, max_properties=max_properties
+                                        selected_county, selected_state, max_properties=5000
                                     )
-                                    
-                                    # Filter by selected property types
-                                    if property_types and not properties_df.empty:
-                                        properties_df = properties_df[
-                                            properties_df['building_type'].isin(property_types)
-                                        ]
-                                    
-                                    if not properties_df.empty:
+                                    if not new_properties_df.empty:
                                         st.success(f"✅ Loaded {len(properties_df)} properties")
                                         # Show property summary
                                         st.info(f"📊 Property types: {properties_df['building_type'].value_counts().to_dict()}")
                                         st.info(f"📍 Properties with coordinates: {properties_df[properties_df['latitude'].notna() & properties_df['longitude'].notna()].shape[0]}")
-                                        st.info(f"🔍 Properties visible at zoom level {zoom_level}+")
                                     else:
                                         st.warning("⚠️ No properties found for this county")
                                 except Exception as e:
@@ -1297,7 +1271,7 @@ def main():
                                     properties_df = None
                         
                         # Try to create the enhanced map with properties overlay
-                        map_chart = create_3d_roi_map_with_properties(data, use_satellite and network_available, properties_df, zoom_level)
+                        map_chart = create_3d_roi_map_with_properties(data, use_satellite and network_available, properties_df, 12)
                         
                         # If enhanced map fails, try fallback map
                         if not map_chart:
@@ -1322,25 +1296,26 @@ def main():
                                     st.markdown(f"""
                                     **Property Overlay:**
                                     - **Blue dots**: {len(valid_props)} individual properties
-                                    - **Zoom level {zoom_level}+**: Properties become visible
-                                    - **Click properties**: View detailed information
+                                    - **Zoom in** to see properties clearly
+                                    - **Click properties** for details
                                     - **Property types**: {valid_props['building_type'].value_counts().to_dict()}
                                     """)
                                 else:
                                     st.markdown("""
                                     **Property Overlay:**
                                     - No properties loaded
-                                    - Enable "Load Properties" to see individual houses
+                                    - Enable "Load Property Data" to see individual houses
                                     """)
-                            
-                            # Property details panel (if a property is clicked)
-                            if 'clicked_property' not in st.session_state:
-                                st.session_state.clicked_property = None
-                            
-                            if st.session_state.clicked_property:
-                                create_property_details_panel(st.session_state.clicked_property)
                         else:
                             st.error("❌ Failed to create map. Please check your data and try again.")
+                        
+                        # Property selector in sidebar
+                        if properties_df is not None and not properties_df.empty:
+                            create_property_selector(properties_df)
+                        
+                        # Property details panel (if a property is clicked)
+                        if st.session_state.clicked_property:
+                            create_property_details_panel(st.session_state.clicked_property)
                     
                     # ROI Distribution with professional styling
                     st.markdown('<h3 class="section-header">ROI Performance Analysis</h3>', unsafe_allow_html=True)
@@ -1411,10 +1386,6 @@ def main():
                             mime="text/csv"
                         )
                     
-                    # Property selector in sidebar
-                    if properties_df is not None and not properties_df.empty:
-                        create_property_selector(properties_df)
-                    
                     # OpenStreetMap Properties Section
                     st.markdown('<h3 class="section-header">OpenStreetMap Property Data</h3>', unsafe_allow_html=True)
                     
@@ -1428,12 +1399,12 @@ def main():
                                 # Initialize OSM properties fetcher
                                 osm_fetcher = OpenStreetMapProperties()
                                 
-                                # Get properties for the selected county
-                                properties_df = osm_fetcher.get_county_properties(selected_county, selected_state, max_properties=500)
+                                                                 # Get properties for the selected county with higher limit
+                                 new_properties_df = osm_fetcher.get_county_properties(selected_county, selected_state, max_properties=10000)
                                 
-                                if not properties_df.empty:
+                                if not new_properties_df.empty:
                                     # Display property summary
-                                    property_summary = osm_fetcher.get_property_summary(properties_df)
+                                    property_summary = osm_fetcher.get_property_summary(new_properties_df)
                                     
                                     col1, col2, col3, col4 = st.columns(4)
                                     with col1:
@@ -1456,11 +1427,11 @@ def main():
                                         st.bar_chart(type_df.set_index('Property Type'))
                                     
                                     # Properties map
-                                    if properties_df['latitude'].notna().sum() > 0:
+                                    if new_properties_df['latitude'].notna().sum() > 0:
                                         st.markdown('<h4 class="section-header">Properties Map</h4>', unsafe_allow_html=True)
                                         
                                         # Create properties map
-                                        properties_map = create_properties_map(properties_df)
+                                        properties_map = create_properties_map(new_properties_df)
                                         if properties_map:
                                             st.pydeck_chart(properties_map, use_container_width=True)
                                     
@@ -1469,7 +1440,7 @@ def main():
                                         st.markdown('<h4 class="section-header">Properties Data Table</h4>', unsafe_allow_html=True)
                                         
                                         # Clean up the DataFrame for display
-                                        display_properties = properties_df.copy()
+                                        display_properties = new_properties_df.copy()
                                         
                                         # Flatten address and features columns for better display
                                         if 'address' in display_properties.columns:
@@ -1494,7 +1465,7 @@ def main():
                                         st.dataframe(display_properties[available_columns], use_container_width=True, hide_index=True)
                                         
                                         # Download properties data
-                                        properties_csv = properties_df.to_csv(index=False)
+                                        properties_csv = new_properties_df.to_csv(index=False)
                                         st.download_button(
                                             label="Download properties data as CSV",
                                             data=properties_csv,
