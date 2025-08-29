@@ -12,7 +12,8 @@ import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 import requests
-from openstreetmap_properties import OpenStreetMapProperties
+from real_estate_api import RealEstateDataFetcher
+from enhanced_data_sources import EnhancedRealEstateDataFetcher
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -668,56 +669,109 @@ def create_3d_roi_map_optimized(data, use_satellite=False, properties_df=None):
         )
     ]
     
-    # Add properties layer if available
-    if properties_df is not None and not properties_df.empty:
-        valid_properties = properties_df[properties_df['latitude'].notna() & properties_df['longitude'].notna()].copy()
-        
-        if len(valid_properties) > 0:
-            logger.info(f"Adding {len(valid_properties)} properties to map")
+    # Dynamic property loading based on zoom level and neighborhood selection
+    if zoom >= 14 and 'selected_neighborhood' in st.session_state and st.session_state.selected_neighborhood:
+        # Load properties for the specific neighborhood
+        try:
+            real_estate_fetcher = RealEstateDataFetcher()
             
-            # Prepare properties data with tooltips
-            properties_with_tooltips = valid_properties.copy()
-            properties_with_tooltips['tooltip_text'] = properties_with_tooltips.apply(
-                lambda row: f"<b>Property Details</b><br/>"
-                           f"Type: {row.get('building_type', 'N/A')}<br/>"
-                           f"Address: {row.get('address', {}).get('street', 'N/A')} {row.get('address', {}).get('housenumber', '')}<br/>"
-                           f"Estimated Value: ${row.get('estimated_value', 0):,.0f}<br/>"
-                           f"OSM ID: {row.get('osm_id', 'N/A')}",
-                axis=1
+            # Get neighborhood boundaries and load properties within that area
+            neighborhood_data = valid_data[valid_data['RegionName'] == st.session_state.selected_neighborhood].iloc[0]
+            neighborhood_lat = neighborhood_data['Latitude']
+            neighborhood_lon = neighborhood_data['Longitude']
+            
+            # Calculate bounding box around neighborhood (adjust radius based on zoom)
+            radius_degrees = 0.01 * (18 - zoom)  # Smaller area for higher zoom
+            bbox = {
+                'min_lat': neighborhood_lat - radius_degrees,
+                'max_lat': neighborhood_lat + radius_degrees,
+                'min_lon': neighborhood_lon - radius_degrees,
+                'max_lon': neighborhood_lon + radius_degrees
+            }
+            
+            # Load properties within the bounding box using real estate API
+            properties_df = real_estate_fetcher.get_properties_in_area(
+                bbox['min_lat'], bbox['max_lat'], 
+                bbox['min_lon'], bbox['max_lon'],
+                max_properties=1000  # Limit for performance
             )
             
-            # Create properties layer with better visibility
-            properties_layer = pdk.Layer(
-                'ScatterplotLayer',
-                properties_with_tooltips,
-                get_position=['longitude', 'latitude'],
-                get_radius=12,  # Slightly larger radius for better visibility
-                get_fill_color=[0, 100, 200, 200],  # More opaque blue for properties
-                get_line_color=[255, 255, 255, 200],
-                pickable=True,
-                opacity=0.8,
-                stroked=True,
-                filled=True,
-                line_width_min_pixels=2,
-                radius_scale=1
-            )
-            
-            # Add properties layer on top
-            layers.append(properties_layer)
-            logger.info(f"Properties layer added with {len(valid_properties)} properties")
-            
-            # Update tooltip to show both ROI and property info
-            scatter_data['tooltip_text'] = scatter_data.apply(
-                lambda row: f"<b>Neighborhood: {row['RegionName']}</b><br/>"
-                           f"ROI: {row['ROI']:.1f}%<br/>"
-                           f"Value: ${row['Current_Value']:,.0f}<br/>"
-                           f"<i>Zoom in to see individual properties</i>",
-                axis=1
-            )
-        else:
-            logger.warning("No valid properties with coordinates found")
-    else:
-        logger.info("No properties data provided for map overlay")
+            if properties_df is not None and not properties_df.empty:
+                valid_properties = properties_df[
+                    (properties_df['latitude'].notna()) & 
+                    (properties_df['longitude'].notna())
+                ].copy()
+                
+                if len(valid_properties) > 0:
+                    logger.info(f"Loaded {len(valid_properties)} properties for {st.session_state.selected_neighborhood}")
+                    
+                    # Create professional property tooltips
+                    properties_with_tooltips = valid_properties.copy()
+                    properties_with_tooltips['tooltip_text'] = properties_with_tooltips.apply(
+                        lambda row: f"""
+                        <div style="padding: 12px; background: rgba(0,0,0,0.95); border-radius: 10px; color: white; min-width: 250px;">
+                            <h4 style="margin: 0 0 8px 0; color: #3b82f6;">🏠 {row.get('building_type', 'Property').title()}</h4>
+                            <p style="margin: 4px 0;"><strong>Address:</strong> {row.get('address', {}).get('housenumber', '')} {row.get('address', {}).get('street', 'N/A')}</p>
+                            <p style="margin: 4px 0;"><strong>Type:</strong> {row.get('building_type', 'N/A')}</p>
+                            <p style="margin: 4px 0;"><strong>Estimated Value:</strong> <span style="color: #10b981;">${row.get('estimated_value', 0):,.0f}</span></p>
+                            <p style="margin: 4px 0;"><strong>OSM ID:</strong> <code>{row.get('osm_id', 'N/A')}</code></p>
+                            <p style="margin: 8px 0 0 0; font-size: 11px; opacity: 0.8;">
+                                <em>Click for detailed information</em>
+                            </p>
+                        </div>
+                        """,
+                        axis=1
+                    )
+                    
+                    # Create properties layer with professional styling
+                    properties_layer = pdk.Layer(
+                        'ScatterplotLayer',
+                        properties_with_tooltips,
+                        get_position=['longitude', 'latitude'],
+                        get_radius=8,  # Smaller radius for houses
+                        get_fill_color=[59, 130, 246, 220],  # Blue with high opacity
+                        get_line_color=[255, 255, 255, 255],
+                        pickable=True,
+                        opacity=0.9,
+                        stroked=True,
+                        filled=True,
+                        line_width_min_pixels=1,
+                        radius_scale=1
+                    )
+                    
+                    layers.append(properties_layer)
+                    
+                    # Update neighborhood tooltip to show property count
+                    scatter_data.loc[scatter_data['RegionName'] == st.session_state.selected_neighborhood, 'tooltip_text'] = f"""
+                    <div style="padding: 10px; background: rgba(0,0,0,0.9); border-radius: 8px; color: white;">
+                        <h3 style="margin: 0 0 10px 0; color: #3b82f6;">{st.session_state.selected_neighborhood}</h3>
+                        <p style="margin: 5px 0;"><strong>ROI:</strong> <span style="color: #10b981;">{neighborhood_data['ROI']:.1f}%</span></p>
+                        <p style="margin: 5px 0;"><strong>Current Value:</strong> <span style="color: #f59e0b;">${neighborhood_data['Current_Value']:,.0f}</span></p>
+                        <p style="margin: 5px 0;"><strong>Properties Loaded:</strong> <span style="color: #3b82f6;">{len(valid_properties)} houses</span></p>
+                        <p style="margin: 10px 0 0 0; font-size: 12px; opacity: 0.8;">
+                            <em>🏠 Individual houses are now visible on the map</em>
+                        </p>
+                    </div>
+                    """
+                    
+        except Exception as e:
+            logger.warning(f"Failed to load properties for {st.session_state.selected_neighborhood}: {e}")
+    
+    elif zoom >= 12:
+        # Show message that properties will appear at higher zoom
+        scatter_data['tooltip_text'] = scatter_data.apply(
+            lambda row: f"""
+            <div style="padding: 10px; background: rgba(0,0,0,0.9); border-radius: 8px; color: white;">
+                <h3 style="margin: 0 0 10px 0; color: #3b82f6;">{row['RegionName']}</h3>
+                <p style="margin: 5px 0;"><strong>ROI:</strong> <span style="color: #10b981;">{row['ROI']:.1f}%</span></p>
+                <p style="margin: 5px 0;"><strong>Current Value:</strong> <span style="color: #f59e0b;">${row['Current_Value']:,.0f}</span></p>
+                <p style="margin: 10px 0 0 0; font-size: 12px; opacity: 0.8;">
+                    <em>🔍 Zoom in to level 14+ and click a neighborhood to see individual houses</em>
+                </p>
+            </div>
+            """,
+            axis=1
+        )
 
     # FORCE OpenStreetMap tiles - this should work on Streamlit Cloud
     try:
@@ -818,9 +872,9 @@ def create_3d_roi_map_optimized(data, use_satellite=False, properties_df=None):
         
         return deck
 
-# Add property interaction functionality to the existing map
-def create_3d_roi_map_with_properties(data, use_satellite=False, properties_df=None, zoom_level=10):
-    """Enhanced map creation with OpenStreetMap property overlay and click interaction"""
+# Dynamic property loading based on map view and zoom level
+def create_dynamic_property_map(data, use_satellite=False, selected_neighborhood=None, zoom_level=10):
+    """Create a dynamic map that loads properties based on zoom level and neighborhood selection"""
     if len(data) == 0:
         return None
     
@@ -848,13 +902,56 @@ def create_3d_roi_map_with_properties(data, use_satellite=False, properties_df=N
     if zoom_level:
         zoom = zoom_level
     
+    # Create view state for the map
     view_state = pdk.ViewState(
         latitude=center_lat,
         longitude=center_lon,
         zoom=zoom,
-        pitch=0,  # Changed to 0 for better compatibility
+        pitch=0,
         bearing=0
     )
+    
+    # Format the data and create color scale based on ROI
+    scatter_data = valid_data.copy()
+    
+    # Enhanced tooltips for neighborhoods
+    scatter_data['tooltip_text'] = scatter_data.apply(
+        lambda row: f"""
+        <div style="padding: 10px; background: rgba(0,0,0,0.9); border-radius: 8px; color: white;">
+            <h3 style="margin: 0 0 10px 0; color: #3b82f6;">{row['RegionName']}</h3>
+            <p style="margin: 5px 0;"><strong>ROI:</strong> <span style="color: #10b981;">{row['ROI']:.1f}%</span></p>
+            <p style="margin: 5px 0;"><strong>Current Value:</strong> <span style="color: #f59e0b;">${row['Current_Value']:,.0f}</span></p>
+            <p style="margin: 5px 0;"><strong>Initial Value:</strong> <span style="color: #8b5cf6;">${row.get('First_Value', 0):,.0f}</span></p>
+            <p style="margin: 10px 0 0 0; font-size: 12px; opacity: 0.8;">
+                <em>💡 Zoom in to level 14+ to see individual houses in this neighborhood</em>
+            </p>
+        </div>
+        """,
+        axis=1
+    )
+    
+    min_roi = scatter_data['ROI'].min()
+    max_roi = scatter_data['ROI'].max()
+    
+    def get_color_by_roi(roi):
+        # Normalize ROI to 0-1 scale
+        if max_roi == min_roi:
+            normalized = 0.5
+        else:
+            normalized = (roi - min_roi) / (max_roi - min_roi)
+        
+        # Create color gradient from red (low) to green (high)
+        if normalized < 0.5:
+            # Red to Yellow
+            return [255, int(255 * normalized * 2), 0, 200]
+        else:
+            # Yellow to Green
+            return [int(255 * (1 - (normalized - 0.5) * 2)), 255, 0, 200]
+    
+    scatter_data['color'] = scatter_data['ROI'].apply(get_color_by_roi)
+
+    # Create heatmap layer with exponential weighting for ROI
+    scatter_data['weighted_roi'] = np.exp(scatter_data['ROI'] / 50) - 1
 
     # Format the data and create color scale based on ROI
     scatter_data = valid_data.copy()
@@ -1237,9 +1334,11 @@ def create_properties_map(properties_df):
 
 # Main app section with performance optimizations
 def main():
-    # Initialize session state for clicked properties
+    # Initialize session state for clicked properties and neighborhood selection
     if 'clicked_property' not in st.session_state:
         st.session_state.clicked_property = None
+    if 'selected_neighborhood' not in st.session_state:
+        st.session_state.selected_neighborhood = None
     
     # Initialize cache database
     setup_coordinates_cache()
@@ -1306,17 +1405,81 @@ def main():
         use_satellite = st.sidebar.checkbox("Satellite View", value=False, 
                                           help="Use satellite imagery as base map (requires network)")
         
-        # Property data options
-        st.sidebar.markdown('<div class="sidebar-section"><h3>🏠 Property Intelligence</h3></div>', unsafe_allow_html=True)
-        load_properties = st.sidebar.checkbox("Enable Property Overlay", value=True,
-                                            help="Load OpenStreetMap property data for detailed analysis")
+            # Enhanced Data Sources Options
+    st.sidebar.markdown('<div class="sidebar-section"><h3>🔍 Enhanced Data Sources</h3></div>', unsafe_allow_html=True)
+    
+    # Enable enhanced data sources
+    enable_enhanced_data = st.sidebar.checkbox("Enable Enhanced Data Sources", value=True,
+                                             help="Use OSMnx, Census, and other free data sources")
+    
+    if enable_enhanced_data:
+        st.sidebar.markdown("**Data Source Settings**")
         
-        if load_properties:
-            st.sidebar.markdown("**Property Display Settings**")
-            zoom_threshold = st.sidebar.slider("Zoom Threshold", min_value=8, max_value=16, value=12,
-                                            help="Properties become visible at this zoom level")
-            max_properties_display = st.sidebar.slider("Max Properties", min_value=1000, max_value=100000, value=50000,
-                                                     help="Maximum properties to display on map")
+        # OSMnx and OpenStreetMap settings
+        st.sidebar.markdown("**🗺️ OpenStreetMap Data**")
+        enable_amenities = st.sidebar.checkbox("Neighborhood Amenities", value=True,
+                                             help="Load schools, restaurants, shopping, etc.")
+        enable_property_boundaries = st.sidebar.checkbox("Property Boundaries", value=True,
+                                                       help="Load building footprints and property data")
+        enable_street_network = st.sidebar.checkbox("Street Network", value=False,
+                                                  help="Load street network for accessibility analysis")
+        
+        # Census data settings
+        st.sidebar.markdown("**📊 Census/ACS Data**")
+        enable_census_data = st.sidebar.checkbox("Demographics & Housing", value=True,
+                                               help="Load population, income, education data")
+        
+        # Scoring systems
+        st.sidebar.markdown("**📈 Scoring Systems**")
+        enable_walkability = st.sidebar.checkbox("Walkability Score", value=True,
+                                              help="Calculate walkability based on nearby amenities")
+        enable_transit_score = st.sidebar.checkbox("Transit Score", value=True,
+                                                 help="Calculate transit accessibility score")
+    
+    # Property data options
+    st.sidebar.markdown('<div class="sidebar-section"><h3>🏠 Property Intelligence</h3></div>', unsafe_allow_html=True)
+    load_properties = st.sidebar.checkbox("Enable Property Overlay", value=True,
+                                        help="Load OpenStreetMap property data for detailed analysis")
+    
+    if load_properties:
+        st.sidebar.markdown("**Property Display Settings**")
+        zoom_threshold = st.sidebar.slider("Zoom Threshold", min_value=8, max_value=16, value=12,
+                                        help="Properties become visible at this zoom level")
+        max_properties_display = st.sidebar.slider("Max Properties", min_value=1000, max_value=100000, value=50000,
+                                                 help="Maximum properties to display on map")
+        
+        # Neighborhood selection for property loading
+        if selected_state and selected_county:
+                st.sidebar.markdown("**Neighborhood Selection**")
+                
+                # Get available neighborhoods for selection
+                available_neighborhoods = data['RegionName'].unique() if 'data' in locals() else []
+                
+                if len(available_neighborhoods) > 0:
+                    selected_neighborhood = st.sidebar.selectbox(
+                        "Select Neighborhood for Property Loading:",
+                        options=['None'] + list(available_neighborhoods),
+                        index=0,
+                        help="Choose a neighborhood to load individual house data"
+                    )
+                    
+                    if selected_neighborhood != 'None':
+                        st.session_state.selected_neighborhood = selected_neighborhood
+                        st.success(f"✅ Selected: {selected_neighborhood}")
+                    else:
+                        st.session_state.selected_neighborhood = None
+                
+                st.sidebar.markdown("""
+                <div class="info-box">
+                    <p><strong>How it works:</strong></p>
+                    <ol style="margin: 0; padding-left: 1.5rem;">
+                        <li>Select a neighborhood from the dropdown above</li>
+                        <li>Zoom in to level 14+ on the map</li>
+                        <li>Individual houses will automatically load</li>
+                        <li>Click on houses to see detailed information</li>
+                    </ol>
+                </div>
+                """, unsafe_allow_html=True)
         
         # Progress indicator with professional UX
         if selected_state and selected_county:            
@@ -1352,6 +1515,55 @@ def main():
                     status_text.empty()
                 
                 if len(data) > 0:
+                    # Enhanced Data Processing
+                    enhanced_data = {}
+                    if enable_enhanced_data:
+                        with st.spinner('Loading enhanced data sources...'):
+                            try:
+                                # Initialize enhanced data fetcher
+                                enhanced_fetcher = EnhancedRealEstateDataFetcher()
+                                
+                                # Get center coordinates for enhanced data
+                                center_lat = data['Latitude'].mean()
+                                center_lon = data['Longitude'].mean()
+                                
+                                # Load enhanced data based on user selections
+                                if enable_amenities:
+                                    enhanced_data['amenities'] = enhanced_fetcher.get_neighborhood_amenities(
+                                        center_lat, center_lon, radius_miles=1.0
+                                    )
+                                
+                                if enable_walkability:
+                                    enhanced_data['walkability'] = enhanced_fetcher.calculate_walkability_score(
+                                        center_lat, center_lon, radius_miles=0.5
+                                    )
+                                
+                                if enable_transit_score:
+                                    enhanced_data['transit_score'] = enhanced_fetcher.calculate_transit_score(
+                                        center_lat, center_lon, radius_miles=1.0
+                                    )
+                                
+                                if enable_census_data:
+                                    enhanced_data['census_data'] = enhanced_fetcher.get_census_data(
+                                        selected_state, selected_county
+                                    )
+                                
+                                if enable_property_boundaries:
+                                    enhanced_data['property_boundaries'] = enhanced_fetcher.get_property_boundaries(
+                                        center_lat, center_lon, radius_miles=0.5
+                                    )
+                                
+                                if enable_street_network:
+                                    enhanced_data['street_network'] = enhanced_fetcher.get_street_network(
+                                        center_lat, center_lon, radius_miles=1.0
+                                    )
+                                
+                                st.success("✅ Enhanced data loaded successfully!")
+                                
+                            except Exception as e:
+                                st.warning(f"⚠️ Some enhanced data sources failed to load: {e}")
+                                logger.warning(f"Enhanced data loading failed: {e}")
+                    
                     # Display statistics with professional styling
                     st.markdown('<h3 class="section-header">Key Performance Metrics</h3>', unsafe_allow_html=True)
                     
@@ -1369,6 +1581,33 @@ def main():
                         coord_coverage = (data['Latitude'].notna().sum() / len(data)) * 100
                         st.markdown(f'<div class="metric-container"><strong>Coordinate Coverage</strong><br><span style="font-size: 1.5rem; color: #3b82f6;">{coord_coverage:.0f}%</span></div>', unsafe_allow_html=True)
                     
+                    # Enhanced Data Metrics (if available)
+                    if enhanced_data:
+                        st.markdown('<h3 class="section-header">Enhanced Data Insights</h3>', unsafe_allow_html=True)
+                        
+                        # Create enhanced metrics row
+                        col1, col2, col3, col4 = st.columns(4)
+                        
+                        with col1:
+                            if 'walkability' in enhanced_data:
+                                walkability_score = enhanced_data['walkability'].get('overall_walkability', 0)
+                                st.markdown(f'<div class="metric-container"><strong>🚶 Walkability Score</strong><br><span style="font-size: 1.5rem; color: #10b981;">{walkability_score:.1f}/100</span></div>', unsafe_allow_html=True)
+                        
+                        with col2:
+                            if 'transit_score' in enhanced_data:
+                                transit_score = enhanced_data['transit_score']
+                                st.markdown(f'<div class="metric-container"><strong>🚌 Transit Score</strong><br><span style="font-size: 1.5rem; color: #3b82f6;">{transit_score:.1f}/100</span></div>', unsafe_allow_html=True)
+                        
+                        with col3:
+                            if 'amenities' in enhanced_data:
+                                total_amenities = sum(len(enhanced_data['amenities'].get(cat, [])) for cat in enhanced_data['amenities'].keys())
+                                st.markdown(f'<div class="metric-container"><strong>🏪 Total Amenities</strong><br><span style="font-size: 1.5rem; color: #f59e0b;">{total_amenities}</span></div>', unsafe_allow_html=True)
+                        
+                        with col4:
+                            if 'property_boundaries' in enhanced_data:
+                                property_count = len(enhanced_data['property_boundaries'])
+                                st.markdown(f'<div class="metric-container"><strong>🏠 Properties</strong><br><span style="font-size: 1.5rem; color: #8b5cf6;">{property_count}</span></div>', unsafe_allow_html=True)
+                    
                     # Create and display the map
                     valid_coords = data['Latitude'].notna().sum()
                     if valid_coords > 0:
@@ -1382,72 +1621,31 @@ def main():
                             load_properties = st.checkbox("Load Properties", value=True, 
                                                        help="Show individual houses on the map")
                         
-                        # Load properties if requested
-                        properties_df = None
+                        # Real Estate API Integration
                         if load_properties:
-                            with st.spinner('Loading comprehensive property data...'):
-                                try:
-                                    osm_fetcher = OpenStreetMapProperties()
-                                    # Load maximum properties for comprehensive coverage
-                                    properties_df = osm_fetcher.get_county_properties(
-                                        selected_county, selected_state, max_properties=max_properties_display
-                                    )
-                                    if not properties_df.empty:
-                                        total_props = len(properties_df)
-                                        valid_coords = properties_df[properties_df['latitude'].notna() & properties_df['longitude'].notna()].shape[0]
-                                        
-                                        st.markdown(f"""
-                                        <div class="success-box">
-                                            <h4 style="margin-top: 0;">✅ Property Data Loaded Successfully</h4>
-                                            <div class="stats-grid">
-                                                <div class="metric-container">
-                                                    <strong>Total Properties</strong>
-                                                    <span style="color: #10b981; font-size: 2rem;">{total_props:,}</span>
-                                                </div>
-                                                <div class="metric-container">
-                                                    <strong>With Coordinates</strong>
-                                                    <span style="color: #3b82f6; font-size: 2rem;">{valid_coords:,}</span>
-                                                </div>
-                                                <div class="metric-container">
-                                                    <strong>Coverage Rate</strong>
-                                                    <span style="color: #8b5cf6; font-size: 2rem;">{(valid_coords/total_props*100):.1f}%</span>
-                                                </div>
-                                            </div>
-                                        </div>
-                                        """, unsafe_allow_html=True)
-                                        
-                                        # Property type breakdown
-                                        if 'building_type' in properties_df.columns:
-                                            type_counts = properties_df['building_type'].value_counts().head(5)
-                                            st.markdown("**📊 Property Type Distribution**")
-                                            for prop_type, count in type_counts.items():
-                                                percentage = (count / total_props) * 100
-                                                st.markdown(f"**{prop_type.title()}**: {count:,} ({percentage:.1f}%)")
-                                                st.progress(percentage / 100)
-                                    else:
-                                        st.markdown("""
-                                        <div class="warning-box">
-                                            <h4 style="margin-top: 0;">⚠️ No Properties Found</h4>
-                                            <p>This could be due to limited OpenStreetMap coverage in rural areas or county boundary mismatches.</p>
-                                        </div>
-                                        """, unsafe_allow_html=True)
-                                except Exception as e:
-                                    st.markdown(f"""
-                                    <div class="warning-box">
-                                        <h4 style="margin-top: 0;">❌ Error Loading Properties</h4>
-                                        <p>Error: {str(e)}</p>
-                                        <p>This feature requires internet connection and may be rate-limited. Try again later.</p>
-                                    </div>
-                                    """, unsafe_allow_html=True)
-                                    properties_df = None
+                            st.markdown("""
+                            <div class="info-box">
+                                <h4 style="margin-top: 0;">🏠 Real Estate API Integration</h4>
+                                <p><strong>How to use the new property system:</strong></p>
+                                <ol style="margin: 0.5rem 0; padding-left: 1.5rem;">
+                                    <li><strong>Select a neighborhood</strong> from the sidebar dropdown</li>
+                                    <li><strong>Zoom in to level 14+</strong> on the map</li>
+                                    <li><strong>Individual houses will automatically load</strong> with detailed information</li>
+                                    <li><strong>Click on houses</strong> to see investment details</li>
+                                </ol>
+                                <p style="margin: 0.5rem 0 0 0; font-size: 0.9rem; color: #6b7280;">
+                                    <em>This system now uses real estate APIs instead of OpenStreetMap for comprehensive property data including prices, bedrooms, bathrooms, square footage, and market information.</em>
+                                </p>
+                            </div>
+                            """, unsafe_allow_html=True)
                         
-                        # Try to create the enhanced map with properties overlay
-                        map_chart = create_3d_roi_map_with_properties(data, use_satellite and network_available, properties_df, zoom_threshold)
+                        # Create the dynamic property map with selected neighborhood
+                        map_chart = create_dynamic_property_map(data, use_satellite and network_available, st.session_state.selected_neighborhood, zoom_threshold)
                         
                         # If enhanced map fails, try fallback map
                         if not map_chart:
                             st.warning("⚠️ Enhanced map failed, trying fallback map...")
-                            map_chart = create_robust_fallback_map(data, properties_df)
+                            map_chart = create_robust_fallback_map(data, None)
                         
                         if map_chart:
                             st.pydeck_chart(map_chart, use_container_width=True)
@@ -1470,22 +1668,7 @@ def main():
                                 </div>
                                 """, unsafe_allow_html=True)
                             with col2:
-                                if properties_df is not None and not properties_df.empty:
-                                    valid_props = properties_df[properties_df['latitude'].notna() & properties_df['longitude'].notna()]
-                                    st.markdown(f"""
-                                    <div class="card">
-                                        <h5 style="margin-top: 0; color: #10b981;">🏠 Property Overlay</h5>
-                                        <ul style="margin: 0; padding-left: 1.5rem;">
-                                            <li><strong style="color: #3b82f6;">Blue dots</strong>: {len(valid_props):,} individual properties</li>
-                                            <li><strong>Zoom level {zoom_threshold}+</strong>: Properties become visible</li>
-                                            <li><strong>Click properties</strong>: View detailed information</li>
-                                        </ul>
-                                        <p style="margin: 0.5rem 0 0 0; font-size: 0.9rem; color: #6b7280;">
-                                            <em>Interactive property exploration enabled</em>
-                                        </p>
-                                    </div>
-                                    """, unsafe_allow_html=True)
-                                else:
+                                # Properties will be loaded dynamically based on enhanced data sources
                                     st.markdown("""
                                     <div class="card">
                                         <h5 style="margin-top: 0; color: #6b7280;">🏠 Property Overlay</h5>
@@ -1497,13 +1680,16 @@ def main():
                         else:
                             st.error("❌ Failed to create map. Please check your data and try again.")
                         
-                        # Property selector in sidebar
-                        if properties_df is not None and not properties_df.empty:
-                            create_property_selector(properties_df)
-                        
-                        # Property details panel (if a property is clicked)
-                        if st.session_state.clicked_property:
-                            create_property_details_panel(st.session_state.clicked_property)
+                        # Property Investment Analysis Panel
+                        if st.session_state.selected_neighborhood and zoom_threshold >= 14:
+                            st.markdown("""
+                            <div class="success-box">
+                                <h4 style="margin-top: 0;">🏠 Property Investment Analysis Ready</h4>
+                                <p><strong>Neighborhood:</strong> {st.session_state.selected_neighborhood}</p>
+                                <p><strong>Zoom Level:</strong> {zoom_threshold} (Properties will load automatically)</p>
+                                <p><em>Individual houses are now visible on the map. Click on any house to see detailed investment information including price, square footage, bedrooms, bathrooms, property taxes, and market data.</em></p>
+                            </div>
+                            """.format(st.session_state.selected_neighborhood, zoom_threshold), unsafe_allow_html=True)
                     
                     # ROI Performance Analysis with professional styling
                     st.markdown('<h3 class="section-header">📈 ROI Performance Analysis</h3>', unsafe_allow_html=True)
@@ -1562,6 +1748,116 @@ def main():
                         """, unsafe_allow_html=True)
                         bottom_roi = data.nsmallest(10, 'ROI')[['RegionName', 'ROI', 'Current_Value']]
                         st.dataframe(bottom_roi, use_container_width=True, hide_index=True)
+                    
+                    # Enhanced Data Details Section
+                    if enhanced_data:
+                        st.markdown('<h3 class="section-header">🔍 Enhanced Data Details</h3>', unsafe_allow_html=True)
+                        
+                        # Create tabs for different data types
+                        tab1, tab2, tab3, tab4 = st.tabs(["🏪 Amenities", "📊 Census Data", "🏠 Property Details", "🗺️ Interactive Map"])
+                        
+                        with tab1:
+                            if 'amenities' in enhanced_data:
+                                st.markdown("### Neighborhood Amenities Analysis")
+                                
+                                # Display amenities by category
+                                for category, amenities_list in enhanced_data['amenities'].items():
+                                    if amenities_list:
+                                        with st.expander(f"{category.title()} ({len(amenities_list)} locations)", expanded=False):
+                                            # Create a DataFrame for display
+                                            amenity_df = pd.DataFrame([
+                                                {
+                                                    'Name': amenity.name,
+                                                    'Type': amenity.amenity_type,
+                                                    'Distance (miles)': f"{amenity.distance_miles:.2f}",
+                                                    'Address': amenity.address or 'N/A',
+                                                    'Phone': amenity.phone or 'N/A'
+                                                }
+                                                for amenity in amenities_list
+                                            ])
+                                            
+                                            st.dataframe(amenity_df, use_container_width=True, hide_index=True)
+                                            
+                                            # Show summary statistics
+                                            avg_distance = np.mean([amenity.distance_miles for amenity in amenities_list])
+                                            st.markdown(f"**Average distance:** {avg_distance:.2f} miles")
+                        
+                        with tab2:
+                            if 'census_data' in enhanced_data:
+                                st.markdown("### Census & Demographic Data")
+                                
+                                for geography, census_info in enhanced_data['census_data'].items():
+                                    with st.expander(f"📊 {geography}", expanded=False):
+                                        col1, col2 = st.columns(2)
+                                        
+                                        with col1:
+                                            st.metric("Population", f"{census_info.total_population:,}")
+                                            st.metric("Median Income", f"${census_info.median_household_income:,.0f}")
+                                            st.metric("Median Home Value", f"${census_info.median_home_value:,.0f}")
+                                            st.metric("Median Rent", f"${census_info.median_rent:,.0f}")
+                                        
+                                        with col2:
+                                            st.metric("Education (Bachelors+)", f"{census_info.education_bachelors_plus:.1f}%")
+                                            st.metric("Employment Rate", f"{census_info.employment_rate:.1f}%")
+                                            st.metric("Poverty Rate", f"{census_info.poverty_rate:.1f}%")
+                                            st.metric("Median Age", f"{census_info.median_age:.1f}")
+                        
+                        with tab3:
+                            if 'property_boundaries' in enhanced_data:
+                                st.markdown("### Property Boundary Analysis")
+                                
+                                # Create property summary
+                                properties = enhanced_data['property_boundaries']
+                                if properties:
+                                    # Calculate summary statistics
+                                    total_area = sum(prop.area_sqft for prop in properties)
+                                    avg_area = total_area / len(properties)
+                                    building_types = {}
+                                    for prop in properties:
+                                        building_types[prop.building_type] = building_types.get(prop.building_type, 0) + 1
+                                    
+                                    col1, col2, col3 = st.columns(3)
+                                    with col1:
+                                        st.metric("Total Properties", len(properties))
+                                    with col2:
+                                        st.metric("Average Area", f"{avg_area:.0f} sq ft")
+                                    with col3:
+                                        st.metric("Total Area", f"{total_area:,.0f} sq ft")
+                                    
+                                    # Show building type distribution
+                                    st.markdown("**Building Type Distribution:**")
+                                    building_df = pd.DataFrame([
+                                        {'Type': btype, 'Count': count}
+                                        for btype, count in building_types.items()
+                                    ]).sort_values('Count', ascending=False)
+                                    
+                                    st.dataframe(building_df, use_container_width=True, hide_index=True)
+                        
+                        with tab4:
+                            if enhanced_data:
+                                st.markdown("### Interactive Neighborhood Map")
+                                
+                                # Create interactive map with all data layers
+                                try:
+                                    center_lat = data['Latitude'].mean()
+                                    center_lon = data['Longitude'].mean()
+                                    
+                                    interactive_map = enhanced_fetcher.create_interactive_map(
+                                        center_lat=center_lat,
+                                        center_lon=center_lon,
+                                        amenities=enhanced_data.get('amenities'),
+                                        property_boundaries=enhanced_data.get('property_boundaries'),
+                                        census_data=enhanced_data.get('census_data')
+                                    )
+                                    
+                                    if interactive_map:
+                                        # Convert folium map to streamlit display
+                                        st.components.v1.html(interactive_map._repr_html_(), height=600)
+                                    else:
+                                        st.warning("Interactive map could not be created")
+                                        
+                                except Exception as e:
+                                    st.error(f"Error creating interactive map: {e}")
                     
                     # Professional data exploration section
                     with st.expander("🔍 Advanced Data Exploration & Analytics", expanded=False):
@@ -1690,97 +1986,26 @@ def main():
                             </div>
                             """, unsafe_allow_html=True)
                     
-                    # Property Intelligence Summary Section
-                    if properties_df is not None and not properties_df.empty:
-                        st.markdown('<h3 class="section-header">🏠 Property Intelligence Summary</h3>', unsafe_allow_html=True)
+                    # Real Estate Investment Analysis Section
+                    if st.session_state.selected_neighborhood:
+                        st.markdown('<h3 class="section-header">🏠 Real Estate Investment Analysis</h3>', unsafe_allow_html=True)
                         
-                        # Professional property summary display
-                        total_props = len(properties_df)
-                        valid_coords = properties_df[properties_df['latitude'].notna() & properties_df['longitude'].notna()].shape[0]
-                        
-                        st.markdown(f"""
-                        <div class="success-box">
-                            <h4 style="margin-top: 0;">📊 Property Data Overview</h4>
-                            <div class="stats-grid">
-                                <div class="metric-container">
-                                    <strong>Total Properties</strong>
-                                    <span style="color: #10b981; font-size: 2rem;">{total_props:,}</span>
-                                </div>
-                                <div class="metric-container">
-                                    <strong>With Coordinates</strong>
-                                    <span style="color: #3b82f6; font-size: 2rem;">{valid_coords:,}</span>
-                                </div>
-                                <div class="metric-container">
-                                    <strong>Coverage Rate</strong>
-                                    <span style="color: #8b5cf6; font-size: 2rem;">{(valid_coords/total_props*100):.1f}%</span>
-                                </div>
-                                <div class="metric-container">
-                                    <strong>Data Quality</strong>
-                                    <span style="color: #f59e0b; font-size: 2rem;">Excellent</span>
-                                </div>
-                            </div>
+                        st.markdown("""
+                        <div class="info-box">
+                            <h4 style="margin-top: 0;">💡 Investment Analysis Features</h4>
+                            <p><strong>This new system provides Redfin/Realtor.com level detail:</strong></p>
+                            <ul style="margin: 0.5rem 0; padding-left: 1.5rem;">
+                                <li><strong>Property Details:</strong> Square footage, bedrooms, bathrooms, year built</li>
+                                <li><strong>Market Data:</strong> Recent sales, price history, days on market</li>
+                                <li><strong>Investment Metrics:</strong> Property taxes, HOA fees, estimated values</li>
+                                <li><strong>Location Scores:</strong> Walk score, transit score, bike score</li>
+                                <li><strong>School Information:</strong> School ratings and district data</li>
+                            </ul>
+                            <p style="margin: 0.5rem 0 0 0; font-size: 0.9rem; color: #6b7280;">
+                                <em>Data is loaded dynamically based on your selected neighborhood and zoom level for optimal performance.</em>
+                            </p>
                         </div>
                         """, unsafe_allow_html=True)
-                        
-                        # Property type breakdown with professional styling
-                        if 'building_type' in properties_df.columns:
-                            st.markdown("""
-                            <div class="card">
-                                <h4 style="margin-top: 0; color: #4f46e5;">🏘️ Property Type Distribution</h4>
-                            </div>
-                            """, unsafe_allow_html=True)
-                            
-                            type_counts = properties_df['building_type'].value_counts().head(8)
-                            if len(type_counts) > 0:
-                                # Create a professional chart
-                                chart_data = pd.DataFrame({
-                                    'Property Type': type_counts.index,
-                                    'Count': type_counts.values,
-                                    'Percentage': (type_counts.values / total_props * 100).round(1)
-                                })
-                                
-                                # Display as a professional table with percentages
-                                st.dataframe(chart_data, use_container_width=True, hide_index=True)
-                                
-                                # Add a note about the data
-                                st.markdown("""
-                                <div class="info-box">
-                                    <p><strong>Data Insights:</strong> This represents the distribution of property types in the selected county, 
-                                    providing valuable insights for investment analysis and market understanding.</p>
-                                </div>
-                                """, unsafe_allow_html=True)
-                        
-                        # Professional data export section
-                        with st.expander("💾 Export Property Intelligence Data", expanded=False):
-                            st.markdown("""
-                            <div class="card">
-                                <h4 style="margin-top: 0; color: #dc2626;">📊 Data Export Options</h4>
-                            </div>
-                            """, unsafe_allow_html=True)
-                            
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                # Download full properties data
-                                properties_csv = properties_df.to_csv(index=False)
-                                st.download_button(
-                                    label="📥 Download Full Property Data (CSV)",
-                                    data=properties_csv,
-                                    file_name=f"{selected_county}_{selected_state}_full_properties.csv",
-                                    mime="text/csv",
-                                    help="Download complete property dataset for analysis"
-                                )
-                            with col2:
-                                st.markdown("""
-                                <div class="info-box">
-                                    <p><strong>Export Benefits:</strong></p>
-                                    <ul>
-                                        <li>Complete property dataset</li>
-                                        <li>Ready for external analysis</li>
-                                        <li>Compatible with Excel/Sheets</li>
-                                        <li>Includes all property attributes</li>
-                                    </ul>
-                                </div>
-                                """, unsafe_allow_html=True)
                 else:
                     st.warning(f"No data found for {selected_county}, {selected_state}")
                     st.info("Try selecting a different state and county combination")
