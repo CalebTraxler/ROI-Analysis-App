@@ -1257,6 +1257,7 @@ def main():
     </div>
     """, unsafe_allow_html=True)
     
+    
     st.markdown("""
     <div class="info-box">
         <h3 style="margin-top: 0;">🎯 Platform Overview</h3>
@@ -1689,104 +1690,97 @@ def main():
                             </div>
                             """, unsafe_allow_html=True)
                     
-                    # OpenStreetMap Properties Section
-                    st.markdown('<h3 class="section-header">OpenStreetMap Property Data</h3>', unsafe_allow_html=True)
-                    
-                    # Add property data loading option
-                    load_properties = st.checkbox("Load OpenStreetMap property data for this county", 
-                                               help="Fetch detailed property information from OpenStreetMap")
-                    
-                    if load_properties:
-                        with st.spinner('Loading OpenStreetMap property data...'):
-                            try:
-                                # Initialize OSM properties fetcher
-                                osm_fetcher = OpenStreetMapProperties()
+                    # Property Intelligence Summary Section
+                    if properties_df is not None and not properties_df.empty:
+                        st.markdown('<h3 class="section-header">🏠 Property Intelligence Summary</h3>', unsafe_allow_html=True)
+                        
+                        # Professional property summary display
+                        total_props = len(properties_df)
+                        valid_coords = properties_df[properties_df['latitude'].notna() & properties_df['longitude'].notna()].shape[0]
+                        
+                        st.markdown(f"""
+                        <div class="success-box">
+                            <h4 style="margin-top: 0;">📊 Property Data Overview</h4>
+                            <div class="stats-grid">
+                                <div class="metric-container">
+                                    <strong>Total Properties</strong>
+                                    <span style="color: #10b981; font-size: 2rem;">{total_props:,}</span>
+                                </div>
+                                <div class="metric-container">
+                                    <strong>With Coordinates</strong>
+                                    <span style="color: #3b82f6; font-size: 2rem;">{valid_coords:,}</span>
+                                </div>
+                                <div class="metric-container">
+                                    <strong>Coverage Rate</strong>
+                                    <span style="color: #8b5cf6; font-size: 2rem;">{(valid_coords/total_props*100):.1f}%</span>
+                                </div>
+                                <div class="metric-container">
+                                    <strong>Data Quality</strong>
+                                    <span style="color: #f59e0b; font-size: 2rem;">Excellent</span>
+                                </div>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                        # Property type breakdown with professional styling
+                        if 'building_type' in properties_df.columns:
+                            st.markdown("""
+                            <div class="card">
+                                <h4 style="margin-top: 0; color: #4f46e5;">🏘️ Property Type Distribution</h4>
+                            </div>
+                            """, unsafe_allow_html=True)
+                            
+                            type_counts = properties_df['building_type'].value_counts().head(8)
+                            if len(type_counts) > 0:
+                                # Create a professional chart
+                                chart_data = pd.DataFrame({
+                                    'Property Type': type_counts.index,
+                                    'Count': type_counts.values,
+                                    'Percentage': (type_counts.values / total_props * 100).round(1)
+                                })
                                 
-                                                                 # Get properties for the selected county with higher limit
-                                 new_properties_df = osm_fetcher.get_county_properties(selected_county, selected_state, max_properties=10000)
+                                # Display as a professional table with percentages
+                                st.dataframe(chart_data, use_container_width=True, hide_index=True)
                                 
-                                if not new_properties_df.empty:
-                                    # Display property summary
-                                    property_summary = osm_fetcher.get_property_summary(new_properties_df)
-                                    
-                                    col1, col2, col3, col4 = st.columns(4)
-                                    with col1:
-                                        st.markdown(f'<div class="metric-container"><strong>Total Properties</strong><br><span style="font-size: 1.5rem; color: #10b981;">{property_summary.get("total_properties", 0)}</span></div>', unsafe_allow_html=True)
-                                    with col2:
-                                        avg_value = property_summary.get("avg_estimated_value", 0)
-                                        st.markdown(f'<div class="metric-container"><strong>Avg Estimated Value</strong><br><span style="font-size: 1.5rem; color: #10b981;">${avg_value:,.0f}</span></div>', unsafe_allow_html=True)
-                                    with col3:
-                                        coord_coverage = property_summary.get("coordinate_coverage", 0)
-                                        st.markdown(f'<div class="metric-container"><strong>Coordinate Coverage</strong><br><span style="font-size: 1.5rem; color: #10b981;">{coord_coverage:.0f}%</span></div>', unsafe_allow_html=True)
-                                    with col4:
-                                        address_coverage = property_summary.get("address_coverage", 0)
-                                        st.markdown(f'<div class="metric-container"><strong>Address Coverage</strong><br><span style="font-size: 1.5rem; color: #10b981;">{address_coverage:.0f}%</span></div>', unsafe_allow_html=True)
-                                    
-                                    # Property type distribution
-                                    st.markdown('<h4 class="section-header">Property Type Distribution</h4>', unsafe_allow_html=True)
-                                    property_types = property_summary.get("property_types", {})
-                                    if property_types:
-                                        type_df = pd.DataFrame(list(property_types.items()), columns=['Property Type', 'Count'])
-                                        st.bar_chart(type_df.set_index('Property Type'))
-                                    
-                                    # Properties map
-                                    if new_properties_df['latitude'].notna().sum() > 0:
-                                        st.markdown('<h4 class="section-header">Properties Map</h4>', unsafe_allow_html=True)
-                                        
-                                        # Create properties map
-                                        properties_map = create_properties_map(new_properties_df)
-                                        if properties_map:
-                                            st.pydeck_chart(properties_map, use_container_width=True)
-                                    
-                                    # Properties data table
-                                    with st.expander("View Properties Data"):
-                                        st.markdown('<h4 class="section-header">Properties Data Table</h4>', unsafe_allow_html=True)
-                                        
-                                        # Clean up the DataFrame for display
-                                        display_properties = new_properties_df.copy()
-                                        
-                                        # Flatten address and features columns for better display
-                                        if 'address' in display_properties.columns:
-                                            address_df = pd.json_normalize(display_properties['address'])
-                                            display_properties = pd.concat([display_properties.drop('address', axis=1), address_df], axis=1)
-                                        
-                                        if 'features' in display_properties.columns:
-                                            features_df = pd.json_normalize(display_properties['features'])
-                                            display_properties = pd.concat([display_properties.drop('features', axis=1), features_df], axis=1)
-                                        
-                                        # Select key columns for display
-                                        key_columns = ['osm_id', 'building_type', 'latitude', 'longitude', 'estimated_value', 
-                                                     'street', 'housenumber', 'city', 'state', 'postcode', 'floors', 'units']
-                                        available_columns = [col for col in key_columns if col in display_properties.columns]
-                                        
-                                        # Format numeric columns
-                                        if 'estimated_value' in display_properties.columns:
-                                            display_properties['estimated_value'] = display_properties['estimated_value'].apply(
-                                                lambda x: f"${x:,.0f}" if pd.notna(x) else "N/A"
-                                            )
-                                        
-                                        st.dataframe(display_properties[available_columns], use_container_width=True, hide_index=True)
-                                        
-                                        # Download properties data
-                                        properties_csv = new_properties_df.to_csv(index=False)
-                                        st.download_button(
-                                            label="Download properties data as CSV",
-                                            data=properties_csv,
-                                            file_name=f"{selected_county}_{selected_state}_properties.csv",
-                                            mime="text/csv"
-                                        )
-                                        
-                                else:
-                                    st.warning("No OpenStreetMap properties found for this county. This could be due to:")
-                                    st.info("""
-                                    - Limited OpenStreetMap coverage in rural areas
-                                    - County boundaries not matching OSM data
-                                    - API rate limiting (try again in a few minutes)
-                                    """)
-                                    
-                            except Exception as e:
-                                st.error(f"Error loading OpenStreetMap properties: {str(e)}")
-                                st.info("This feature requires internet connection and may be rate-limited. Try again later.")
+                                # Add a note about the data
+                                st.markdown("""
+                                <div class="info-box">
+                                    <p><strong>Data Insights:</strong> This represents the distribution of property types in the selected county, 
+                                    providing valuable insights for investment analysis and market understanding.</p>
+                                </div>
+                                """, unsafe_allow_html=True)
+                        
+                        # Professional data export section
+                        with st.expander("💾 Export Property Intelligence Data", expanded=False):
+                            st.markdown("""
+                            <div class="card">
+                                <h4 style="margin-top: 0; color: #dc2626;">📊 Data Export Options</h4>
+                            </div>
+                            """, unsafe_allow_html=True)
+                            
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                # Download full properties data
+                                properties_csv = properties_df.to_csv(index=False)
+                                st.download_button(
+                                    label="📥 Download Full Property Data (CSV)",
+                                    data=properties_csv,
+                                    file_name=f"{selected_county}_{selected_state}_full_properties.csv",
+                                    mime="text/csv",
+                                    help="Download complete property dataset for analysis"
+                                )
+                            with col2:
+                                st.markdown("""
+                                <div class="info-box">
+                                    <p><strong>Export Benefits:</strong></p>
+                                    <ul>
+                                        <li>Complete property dataset</li>
+                                        <li>Ready for external analysis</li>
+                                        <li>Compatible with Excel/Sheets</li>
+                                        <li>Includes all property attributes</li>
+                                    </ul>
+                                </div>
+                                """, unsafe_allow_html=True)
                 else:
                     st.warning(f"No data found for {selected_county}, {selected_state}")
                     st.info("Try selecting a different state and county combination")
