@@ -12,8 +12,12 @@ import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 import requests
+from typing import Dict, List, Optional
+import folium
+from streamlit_folium import folium_static
 from real_estate_api import RealEstateDataFetcher
 from enhanced_data_sources import EnhancedRealEstateDataFetcher
+from enhanced_neighborhood_system import NeighborhoodBoundaryManager, ContinuousHeatMapGenerator, EnhancedHouseVisualizer
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -1267,6 +1271,277 @@ def create_property_selector(properties_df):
             st.session_state.clicked_property = selected_property.to_dict()
             st.rerun()
 
+def create_enhanced_neighborhood_map(data, enhanced_data, use_satellite=False, zoom_level=10):
+    """
+    Create enhanced neighborhood map with continuous heat coverage and house visualization
+    """
+    try:
+        if len(data) == 0:
+            return None
+        
+        # Filter out rows with missing coordinates
+        valid_data = data.dropna(subset=['Latitude', 'Longitude'])
+        if len(valid_data) == 0:
+            st.warning("No valid coordinates found for visualization")
+            return None
+        
+        # Calculate view state
+        center_lat = valid_data['Latitude'].mean()
+        center_lon = valid_data['Longitude'].mean()
+        
+        # Calculate appropriate zoom level
+        lat_range = valid_data['Latitude'].max() - valid_data['Latitude'].min()
+        lon_range = valid_data['Longitude'].max() - valid_data['Longitude'].min()
+        max_range = max(lat_range, lon_range)
+        
+        if max_range > 0:
+            zoom = max(8, min(15, 20 / max_range))
+        else:
+            zoom = 10
+        
+        # Override with user-selected zoom level if provided
+        if zoom_level:
+            zoom = zoom_level
+        
+        view_state = pdk.ViewState(
+            latitude=center_lat,
+            longitude=center_lon,
+            zoom=zoom,
+            pitch=0,
+            bearing=0
+        )
+        
+        # Create layers list
+        layers = []
+        
+        # Layer 1: Continuous Heat Map (if available)
+        if 'continuous_heatmap' in enhanced_data:
+            try:
+                # Create heat map layer from interpolation grid
+                heatmap_data = []
+                lat_grid = enhanced_data.get('lat_grid', [])
+                lon_grid = enhanced_data.get('lon_grid', [])
+                heatmap_grid = enhanced_data['continuous_heatmap']
+                
+                if len(lat_grid) > 0 and len(lon_grid) > 0:
+                    for i, lat in enumerate(lat_grid):
+                        for j, lon in enumerate(lon_grid):
+                            if i < heatmap_grid.shape[0] and j < heatmap_grid.shape[1]:
+                                heatmap_data.append({
+                                    'latitude': lat,
+                                    'longitude': lon,
+                                    'roi_value': float(heatmap_grid[i, j])
+                                })
+                    
+                    if heatmap_data:
+                        # Create continuous heat map layer
+                        heatmap_layer = pdk.Layer(
+                            'HeatmapLayer',
+                            heatmap_data,
+                            get_position=['longitude', 'latitude'],
+                            get_weight='roi_value',
+                            radiusPixels=80,
+                            intensity=3,
+                            threshold=0.01,
+                            colorRange=[
+                                [255, 255, 178, 100],  # Light yellow (low ROI)
+                                [254, 204, 92, 150],   # Yellow
+                                [253, 141, 60, 200],   # Orange
+                                [240, 59, 32, 250],    # Red-Orange
+                                [189, 0, 38, 255]      # Deep Red (high ROI)
+                            ],
+                            pickable=False
+                        )
+                        layers.append(heatmap_layer)
+                        
+            except Exception as e:
+                logger.warning(f"Continuous heat map creation failed: {e}")
+        
+        # Layer 2: Neighborhood Boundaries (if available)
+        if 'neighborhood_boundaries' in enhanced_data:
+            try:
+                # Create neighborhood boundary layer
+                boundary_data = []
+                for neighborhood_name, boundary in enhanced_data['neighborhood_boundaries'].items():
+                    if hasattr(boundary, 'exterior'):
+                        coords = list(boundary.exterior.coords)
+                        boundary_data.append({
+                            'neighborhood': neighborhood_name,
+                            'coordinates': coords
+                        })
+                
+                if boundary_data:
+                    # Create boundary layer (simplified for now - full implementation would require custom layer)
+                    logger.info("Neighborhood boundaries available for visualization")
+                    
+            except Exception as e:
+                logger.warning(f"Neighborhood boundary visualization failed: {e}")
+        
+        # Layer 3: Enhanced House Visualization (if available)
+        if 'neighborhood_houses' in enhanced_data:
+            try:
+                # Create enhanced house layer
+                house_data = []
+                for house in enhanced_data['neighborhood_houses']:
+                    if house.get('latitude') and house.get('longitude'):
+                        house_data.append({
+                            'latitude': house['latitude'],
+                            'longitude': house['longitude'],
+                            'osm_id': house.get('osm_id', 'N/A'),
+                            'building_type': house.get('building_type', 'unknown'),
+                            'area_sqft': house.get('area_sqft', 0),
+                            'year_built': house.get('year_built', 'N/A'),
+                            'address': house.get('address', 'N/A'),
+                            'size_category': _categorize_house_size(house.get('area_sqft', 0)),
+                            'roi_color': _calculate_house_color(house),
+                            'tooltip_text': _create_enhanced_house_tooltip(house)
+                        })
+                
+                if house_data:
+                    # Create enhanced house layer
+                    house_layer = pdk.Layer(
+                        'ScatterplotLayer',
+                        house_data,
+                        get_position=['longitude', 'latitude'],
+                        get_radius='size_category',
+                        get_fill_color='roi_color',
+                        get_line_color=[255, 255, 255, 200],
+                        pickable=True,
+                        opacity=0.9,
+                        stroked=True,
+                        filled=True,
+                        line_width_min_pixels=2,
+                        radius_scale=1,
+                        radius_min_pixels=8,
+                        radius_max_pixels=20
+                    )
+                    layers.append(house_layer)
+                    
+            except Exception as e:
+                logger.warning(f"Enhanced house visualization failed: {e}")
+        
+        # Layer 4: Neighborhood Centroids (for reference)
+        neighborhood_data = valid_data.copy()
+        neighborhood_data['tooltip_text'] = neighborhood_data.apply(
+            lambda row: f"""
+            <div style="padding: 10px; background: rgba(0,0,0,0.9); border-radius: 8px; color: white;">
+                <h3 style="margin: 0 0 10px 0; color: #3b82f6;">{row['RegionName']}</h3>
+                <p style="margin: 5px 0;"><strong>ROI:</strong> <span style="color: #10b981;">{row['ROI']:.1f}%</span></p>
+                <p style="margin: 5px 0;"><strong>Current Value:</strong> <span style="color: #f59e0b;">${row['Current_Value']:,.0f}</span></p>
+                <p style="margin: 10px 0 0 0; font-size: 12px; opacity: 0.8;">
+                    <em>💡 Select this neighborhood to see individual houses</em>
+                </p>
+            </div>
+            """,
+            axis=1
+        )
+        
+        # Create neighborhood centroids layer
+        neighborhood_layer = pdk.Layer(
+            'ScatterplotLayer',
+            neighborhood_data,
+            get_position=['Longitude', 'Latitude'],
+            get_radius=25,
+            get_fill_color=[255, 255, 255, 150],
+            get_line_color=[0, 0, 0, 200],
+            pickable=True,
+            opacity=0.8,
+            stroked=True,
+            filled=True,
+            line_width_min_pixels=3,
+            radius_scale=1
+        )
+        layers.append(neighborhood_layer)
+        
+        # Create deck with OpenStreetMap style
+        deck = pdk.Deck(
+            layers=layers,
+            initial_view_state=view_state,
+            map_style='https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',
+            tooltip={
+                "html": "<b>{tooltip_text}</b>",
+                "style": {
+                    "backgroundColor": "rgba(0, 0, 0, 0.8)",
+                    "color": "white",
+                    "padding": "10px",
+                    "borderRadius": "5px",
+                    "fontSize": "12px"
+                }
+            },
+            height=600
+        )
+        
+        logger.info("Enhanced neighborhood map created successfully")
+        return deck
+        
+    except Exception as e:
+        logger.error(f"Error creating enhanced neighborhood map: {e}")
+        return None
+
+def _categorize_house_size(area_sqft: float) -> int:
+    """Categorize house by size for radius scaling"""
+    if area_sqft < 1000:
+        return 8
+    elif area_sqft < 2000:
+        return 12
+    elif area_sqft < 3000:
+        return 16
+    else:
+        return 20
+
+def _calculate_house_color(house: Dict) -> List[int]:
+    """Calculate house color based on characteristics"""
+    try:
+        # Base color (blue for houses)
+        base_color = [59, 130, 246]
+        
+        # Adjust based on house characteristics
+        area = house.get('area_sqft', 1000)
+        year = house.get('year_built', 2000)
+        
+        # Size adjustment (larger houses get darker blue)
+        size_factor = min(area / 2000, 1.0)
+        color_adjustment = int(50 * size_factor)
+        
+        # Age adjustment (newer houses get brighter)
+        if year and year != 'N/A' and year > 2000:
+            age_factor = 0.8
+        else:
+            age_factor = 1.0
+        
+        final_color = [
+            int(base_color[0] * age_factor),
+            int(base_color[1] * age_factor),
+            int(base_color[2] * age_factor),
+            220  # Alpha
+        ]
+        
+        return final_color
+        
+    except Exception as e:
+        logger.warning(f"House color calculation failed: {e}")
+        return [59, 130, 246, 220]  # Default blue
+
+def _create_enhanced_house_tooltip(house: Dict) -> str:
+    """Create enhanced tooltip for house"""
+    try:
+        return f"""
+        <div style="padding: 12px; background: rgba(0,0,0,0.95); border-radius: 10px; color: white; min-width: 280px;">
+            <h4 style="margin: 0 0 8px 0; color: #3b82f6;">🏠 {house.get('building_type', 'Property').title()}</h4>
+            <p style="margin: 4px 0;"><strong>Address:</strong> {house.get('address', 'N/A')}</p>
+            <p style="margin: 4px 0;"><strong>Type:</strong> {house.get('building_type', 'N/A')}</p>
+            <p style="margin: 4px 0;"><strong>Area:</strong> {house.get('area_sqft', 0):,.0f} sq ft</p>
+            <p style="margin: 4px 0;"><strong>Year Built:</strong> {house.get('year_built', 'N/A')}</p>
+            <p style="margin: 4px 0;"><strong>OSM ID:</strong> <code>{house.get('osm_id', 'N/A')}</code></p>
+            <p style="margin: 8px 0 0 0; font-size: 11px; opacity: 0.8;">
+                <em>Click for detailed investment analysis</em>
+            </p>
+        </div>
+        """
+    except Exception as e:
+        logger.warning(f"Enhanced tooltip creation failed: {e}")
+        return f"<b>🏠 {house.get('building_type', 'Property')}</b>"
+
 def create_properties_map(properties_df):
     """Create a map visualization for OpenStreetMap properties"""
     try:
@@ -1523,9 +1798,29 @@ def main():
                                 # Initialize enhanced data fetcher
                                 enhanced_fetcher = EnhancedRealEstateDataFetcher()
                                 
+                                # Initialize enhanced neighborhood system
+                                boundary_manager = NeighborhoodBoundaryManager()
+                                heatmap_generator = ContinuousHeatMapGenerator()
+                                house_visualizer = EnhancedHouseVisualizer()
+                                
                                 # Get center coordinates for enhanced data
                                 center_lat = data['Latitude'].mean()
                                 center_lon = data['Longitude'].mean()
+                                
+                                # Define neighborhood boundaries for continuous coverage
+                                if enable_property_boundaries:
+                                    st.info("🗺️ Defining neighborhood boundaries for continuous coverage...")
+                                    neighborhood_boundaries = boundary_manager.define_neighborhood_boundaries(
+                                        data, buffer_miles=0.5
+                                    )
+                                    enhanced_data['neighborhood_boundaries'] = neighborhood_boundaries
+                                    
+                                    # Generate continuous heat map
+                                    st.info("🔥 Generating continuous heat map...")
+                                    continuous_heatmap = heatmap_generator.generate_continuous_heatmap(
+                                        data, resolution=100
+                                    )
+                                    enhanced_data['continuous_heatmap'] = continuous_heatmap
                                 
                                 # Load enhanced data based on user selections
                                 if enable_amenities:
@@ -1639,8 +1934,16 @@ def main():
                             </div>
                             """, unsafe_allow_html=True)
                         
-                        # Create the dynamic property map with selected neighborhood
-                        map_chart = create_dynamic_property_map(data, use_satellite and network_available, st.session_state.selected_neighborhood, zoom_threshold)
+                        # Create the enhanced dynamic property map with neighborhood boundaries
+                        if 'neighborhood_boundaries' in enhanced_data and 'neighborhood_houses' in enhanced_data:
+                            map_chart = create_enhanced_neighborhood_map(
+                                data, 
+                                enhanced_data, 
+                                use_satellite and network_available, 
+                                zoom_threshold
+                            )
+                        else:
+                            map_chart = create_dynamic_property_map(data, use_satellite and network_available, st.session_state.selected_neighborhood, zoom_threshold)
                         
                         # If enhanced map fails, try fallback map
                         if not map_chart:
@@ -1680,16 +1983,59 @@ def main():
                         else:
                             st.error("❌ Failed to create map. Please check your data and try again.")
                         
-                        # Property Investment Analysis Panel
+                        # Enhanced Property Investment Analysis Panel
                         if st.session_state.selected_neighborhood and zoom_threshold >= 14:
                             st.markdown("""
                             <div class="success-box">
-                                <h4 style="margin-top: 0;">🏠 Property Investment Analysis Ready</h4>
+                                <h4 style="margin-top: 0;">🏠 Enhanced Property Investment Analysis Ready</h4>
                                 <p><strong>Neighborhood:</strong> {st.session_state.selected_neighborhood}</p>
                                 <p><strong>Zoom Level:</strong> {zoom_threshold} (Properties will load automatically)</p>
-                                <p><em>Individual houses are now visible on the map. Click on any house to see detailed investment information including price, square footage, bedrooms, bathrooms, property taxes, and market data.</em></p>
+                                <p><em>Individual houses are now visible on the map with enhanced visualization. Houses are sized by square footage and colored by age/characteristics.</em></p>
                             </div>
                             """.format(st.session_state.selected_neighborhood, zoom_threshold), unsafe_allow_html=True)
+                            
+                            # Load houses for the selected neighborhood
+                            if 'neighborhood_boundaries' in enhanced_data:
+                                try:
+                                    with st.spinner(f'Loading houses for {st.session_state.selected_neighborhood}...'):
+                                        # Get neighborhood center
+                                        neighborhood_data = data[data['RegionName'] == st.session_state.selected_neighborhood].iloc[0]
+                                        neighborhood_lat = neighborhood_data['Latitude']
+                                        neighborhood_lon = neighborhood_data['Longitude']
+                                        
+                                        # Load houses within neighborhood boundary
+                                        neighborhood_houses = boundary_manager.get_neighborhood_houses(
+                                            st.session_state.selected_neighborhood,
+                                            neighborhood_lat,
+                                            neighborhood_lon,
+                                            radius_miles=1.0
+                                        )
+                                        
+                                        if neighborhood_houses:
+                                            enhanced_data['neighborhood_houses'] = neighborhood_houses
+                                            st.success(f"✅ Loaded {len(neighborhood_houses)} houses in {st.session_state.selected_neighborhood}")
+                                            
+                                            # Show house statistics
+                                            house_areas = [h.get('area_sqft', 0) for h in neighborhood_houses if h.get('area_sqft')]
+                                            house_years = [h.get('year_built') for h in neighborhood_houses if h.get('year_built') and h.get('year_built') != 'N/A']
+                                            
+                                            col1, col2, col3 = st.columns(3)
+                                            with col1:
+                                                st.metric("Total Houses", len(neighborhood_houses))
+                                            with col2:
+                                                if house_areas:
+                                                    avg_area = np.mean(house_areas)
+                                                    st.metric("Average Area", f"{avg_area:.0f} sq ft")
+                                            with col3:
+                                                if house_years:
+                                                    avg_year = np.mean(house_years)
+                                                    st.metric("Average Year Built", f"{avg_year:.0f}")
+                                        else:
+                                            st.warning(f"No houses found in {st.session_state.selected_neighborhood}")
+                                            
+                                except Exception as e:
+                                    st.error(f"Error loading neighborhood houses: {e}")
+                                    logger.error(f"Neighborhood house loading failed: {e}")
                     
                     # ROI Performance Analysis with professional styling
                     st.markdown('<h3 class="section-header">📈 ROI Performance Analysis</h3>', unsafe_allow_html=True)
@@ -1837,27 +2183,126 @@ def main():
                             if enhanced_data:
                                 st.markdown("### Interactive Neighborhood Map")
                                 
-                                # Create interactive map with all data layers
+                                # Show neighborhood boundaries info
+                                if 'neighborhood_boundaries' in enhanced_data:
+                                    st.markdown("#### 🗺️ Neighborhood Boundaries")
+                                    st.info(f"**{len(enhanced_data['neighborhood_boundaries'])} neighborhoods** have been defined with continuous coverage")
+                                    
+                                    # Display boundary statistics
+                                    boundary_stats = []
+                                    for name, boundary in enhanced_data['neighborhood_boundaries'].items():
+                                        if hasattr(boundary, 'area'):
+                                            area_sq_miles = boundary.area * (69.0 * 69.0)  # Convert to square miles
+                                            boundary_stats.append({
+                                                'Neighborhood': name,
+                                                'Area (sq miles)': f"{area_sq_miles:.2f}",
+                                                'Shape Type': boundary.geom_type if hasattr(boundary, 'geom_type') else 'Unknown'
+                                            })
+                                    
+                                    if boundary_stats:
+                                        st.dataframe(pd.DataFrame(boundary_stats), use_container_width=True)
+                                
+                                # Show house information
+                                if 'neighborhood_houses' in enhanced_data:
+                                    st.markdown("#### 🏠 Individual Houses")
+                                    houses = enhanced_data['neighborhood_houses']
+                                    st.success(f"**{len(houses)} houses** loaded from OpenStreetMap")
+                                    
+                                    # House statistics
+                                    if houses:
+                                        house_df = pd.DataFrame(houses)
+                                        house_df = house_df[['address', 'building_type', 'area_sqft', 'year_built', 'stories']]
+                                        house_df.columns = ['Address', 'Type', 'Area (sq ft)', 'Year Built', 'Stories']
+                                        
+                                        # Filter out invalid data
+                                        house_df = house_df.replace('N/A', np.nan)
+                                        house_df = house_df.dropna(subset=['Address'])
+                                        
+                                        if not house_df.empty:
+                                            st.dataframe(house_df.head(20), use_container_width=True)
+                                            if len(house_df) > 20:
+                                                st.info(f"Showing first 20 of {len(house_df)} houses. Use the map for full visualization.")
+                                        else:
+                                            st.warning("No valid house data to display")
+                                
+                                # Show continuous heat map info
+                                if 'continuous_heatmap' in enhanced_data:
+                                    st.markdown("#### 🔥 Continuous Heat Map")
+                                    st.success("Continuous ROI heat map generated with smooth transitions between neighborhoods")
+                                    
+                                    # Heat map statistics
+                                    heatmap = enhanced_data['continuous_heatmap']
+                                    if heatmap is not None:
+                                        st.metric("Heat Map Resolution", f"{heatmap.shape[0]}x{heatmap.shape[1]} grid")
+                                        st.metric("Coverage Area", "Entire neighborhood region")
+                                        st.metric("Smoothing", "Gaussian interpolation applied")
+                                
+                                # Create and display interactive Folium map
                                 try:
-                                    center_lat = data['Latitude'].mean()
-                                    center_lon = data['Longitude'].mean()
-                                    
-                                    interactive_map = enhanced_fetcher.create_interactive_map(
-                                        center_lat=center_lat,
-                                        center_lon=center_lon,
-                                        amenities=enhanced_data.get('amenities'),
-                                        property_boundaries=enhanced_data.get('property_boundaries'),
-                                        census_data=enhanced_data.get('census_data')
-                                    )
-                                    
-                                    if interactive_map:
-                                        # Convert folium map to streamlit display
-                                        st.components.v1.html(interactive_map._repr_html_(), height=600)
+                                    if 'neighborhood_boundaries' in enhanced_data and 'neighborhood_houses' in enhanced_data:
+                                        st.markdown("#### 🗺️ Interactive Neighborhood Map")
+                                        
+                                        # Create Folium map
+                                        center_lat = data['Latitude'].mean()
+                                        center_lon = data['Longitude'].mean()
+                                        
+                                        m = folium.Map(
+                                            location=[center_lat, center_lon],
+                                            zoom_start=12,
+                                            tiles='OpenStreetMap'
+                                        )
+                                        
+                                        # Add neighborhood boundaries
+                                        for name, boundary in enhanced_data['neighborhood_boundaries'].items():
+                                            if hasattr(boundary, 'exterior'):
+                                                coords = list(boundary.exterior.coords)
+                                                coords = [(lat, lon) for lon, lat in coords]  # Swap for Folium
+                                                
+                                                folium.Polygon(
+                                                    locations=coords,
+                                                    popup=f"<b>{name}</b><br>Neighborhood Boundary",
+                                                    color='blue',
+                                                    weight=2,
+                                                    fill=True,
+                                                    fillColor='blue',
+                                                    fillOpacity=0.1
+                                                ).add_to(m)
+                                        
+                                        # Add houses
+                                        for house in enhanced_data['neighborhood_houses']:
+                                            if house.get('latitude') and house.get('longitude'):
+                                                # Color code by building type
+                                                if house.get('building_type') == 'house':
+                                                    color = 'red'
+                                                elif house.get('building_type') == 'apartment':
+                                                    color = 'green'
+                                                else:
+                                                    color = 'blue'
+                                                
+                                                folium.CircleMarker(
+                                                    location=[house['latitude'], house['longitude']],
+                                                    radius=5,
+                                                    popup=f"""
+                                                    <b>🏠 {house.get('building_type', 'Property').title()}</b><br>
+                                                    Address: {house.get('address', 'N/A')}<br>
+                                                    Area: {house.get('area_sqft', 0):,.0f} sq ft<br>
+                                                    Year: {house.get('year_built', 'N/A')}<br>
+                                                    Stories: {house.get('stories', 'N/A')}
+                                                    """,
+                                                    color=color,
+                                                    fill=True,
+                                                    fillOpacity=0.7
+                                                ).add_to(m)
+                                        
+                                        # Display the map
+                                        folium_static(m, width=800, height=600)
+                                        
                                     else:
-                                        st.warning("Interactive map could not be created")
+                                        st.info("Enable 'Property Boundaries' in the sidebar to see the interactive neighborhood map")
                                         
                                 except Exception as e:
                                     st.error(f"Error creating interactive map: {e}")
+                                    logger.error(f"Interactive map creation failed: {e}")
                     
                     # Professional data exploration section
                     with st.expander("🔍 Advanced Data Exploration & Analytics", expanded=False):

@@ -25,20 +25,22 @@ def main():
     print("🚀 Enhanced ROI Analysis Platform - Dependency Installer")
     print("=" * 60)
     
-    # Core enhanced dependencies
-    enhanced_packages = [
-        "osmnx>=1.6.0",
-        "geopandas>=0.14.0", 
-        "shapely>=2.0.0",
-        "folium>=0.15.0",
-        "contextily>=1.4.0",
-        "cenpy>=1.0.0",
-        "overpy>=0.7.0",
-        "geocoder>=1.38.1",
-        "rtree>=1.1.0",
-        "fiona>=1.9.0",
-        "pyproj>=3.6.0"
-    ]
+                  # Core enhanced dependencies
+              enhanced_packages = [
+                  "osmnx>=1.6.0",
+                  "geopandas>=0.14.0",
+                  "shapely>=2.0.0",
+                  "folium>=0.15.0",
+                  "contextily>=1.4.0",
+                  "cenpy>=1.0.0",
+                  "overpy>=0.7.0",
+                  "geocoder>=1.38.1",
+                  "rtree>=1.1.0",
+                  "fiona>=1.9.0",
+                  "pyproj>=3.6.0",
+                  "streamlit-folium>=0.13.0",
+                  "scipy>=1.10.0"
+              ]
     
     # Original dependencies (in case they're missing)
     original_packages = [
