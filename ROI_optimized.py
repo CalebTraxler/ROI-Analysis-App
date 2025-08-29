@@ -29,69 +29,170 @@ st.set_page_config(
 # Custom CSS for professional styling
 st.markdown("""
 <style>
+    /* Modern Professional Design System */
     .main-header {
-        font-size: 2.5rem;
-        font-weight: 600;
-        color: #1f2937;
-        margin-bottom: 1rem;
-        border-bottom: 3px solid #3b82f6;
-        padding-bottom: 0.5rem;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 3rem 2rem;
+        border-radius: 20px;
+        margin-bottom: 3rem;
+        text-align: center;
+        box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+        position: relative;
+        overflow: hidden;
     }
-    
-    .metric-container {
-        background-color: #f8fafc;
-        padding: 1rem;
-        border-radius: 8px;
-        border-left: 4px solid #3b82f6;
-        margin: 0.5rem 0;
+    .main-header::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><pattern id="grain" width="100" height="100" patternUnits="userSpaceOnUse"><circle cx="25" cy="25" r="1" fill="white" opacity="0.1"/><circle cx="75" cy="75" r="1" fill="white" opacity="0.1"/><circle cx="50" cy="10" r="0.5" fill="white" opacity="0.1"/></pattern></defs><rect width="100" height="100" fill="url(%23grain)"/></svg>');
+        opacity: 0.3;
+    }
+    .main-header h1 {
+        font-size: 3rem;
+        font-weight: 700;
+        margin: 0;
+        text-shadow: 0 2px 4px rgba(0,0,0,0.3);
+        position: relative;
+        z-index: 1;
+    }
+    .main-header p {
+        font-size: 1.4rem;
+        margin: 1rem 0 0 0;
+        opacity: 0.95;
+        font-weight: 300;
+        position: relative;
+        z-index: 1;
     }
     
     .section-header {
-        font-size: 1.5rem;
-        font-weight: 500;
+        background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+        color: white;
+        padding: 1.5rem;
+        border-radius: 15px;
+        margin: 2rem 0 1.5rem 0;
+        text-align: center;
+        box-shadow: 0 8px 25px rgba(79, 70, 229, 0.3);
+        font-weight: 600;
+        font-size: 1.3rem;
+    }
+    
+    .metric-container {
+        background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+        padding: 2rem;
+        border-radius: 20px;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+        border: 1px solid #e2e8f0;
+        text-align: center;
+        transition: all 0.3s ease;
+        position: relative;
+        overflow: hidden;
+    }
+    .metric-container:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 20px 40px rgba(0, 0, 0, 0.12);
+    }
+    .metric-container::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 4px;
+        background: linear-gradient(90deg, #4f46e5, #7c3aed, #ec4899);
+    }
+    .metric-container strong {
         color: #374151;
-        margin: 2rem 0 1rem 0;
-        padding: 0.5rem 0;
-        border-bottom: 2px solid #e5e7eb;
+        font-size: 0.9rem;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        font-weight: 600;
+        display: block;
+        margin-bottom: 0.5rem;
+    }
+    .metric-container span {
+        display: block;
+        margin-top: 0.5rem;
+        font-weight: 700;
     }
     
     .sidebar-section {
-        background-color: #f9fafb;
-        padding: 1rem;
-        border-radius: 6px;
-        margin: 0.5rem 0;
-        border: 1px solid #e5e7eb;
-    }
-    
-    .data-table {
-        background-color: #ffffff;
-        border-radius: 8px;
-        padding: 1rem;
-        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-    }
-    
-    .success-box {
-        background-color: #d1fae5;
-        border: 1px solid #10b981;
-        border-radius: 6px;
-        padding: 0.75rem;
-        color: #065f46;
-    }
-    
-    .warning-box {
-        background-color: #fef3c7;
-        border: 1px solid #f59e0b;
-        border-radius: 6px;
-        padding: 0.75rem;
-        color: #92400e;
+        background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+        padding: 1.5rem;
+        border-radius: 15px;
+        margin: 1.5rem 0;
+        border: 1px solid #e2e8f0;
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.05);
     }
     
     .info-box {
-        background-color: #dbeafe;
+        background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
         border: 1px solid #3b82f6;
-        border-radius: 6px;
-        padding: 0.75rem;
-        color: #1e40af;
+        border-radius: 15px;
+        padding: 1.5rem;
+        margin: 1.5rem 0;
+        box-shadow: 0 4px 15px rgba(59, 130, 246, 0.1);
+    }
+    
+    .success-box {
+        background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
+        border: 1px solid #22c55e;
+        color: #065f46;
+        border-radius: 15px;
+        padding: 1.5rem;
+        margin: 1.5rem 0;
+        box-shadow: 0 4px 15px rgba(34, 197, 94, 0.1);
+    }
+    
+    .warning-box {
+        background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+        border: 1px solid #f59e0b;
+        color: #92400e;
+        border-radius: 15px;
+        padding: 1.5rem;
+        margin: 1.5rem 0;
+        box-shadow: 0 4px 15px rgba(245, 158, 11, 0.1);
+    }
+    
+    .card {
+        background: white;
+        border-radius: 15px;
+        padding: 2rem;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+        border: 1px solid #e2e8f0;
+        margin: 1rem 0;
+    }
+    
+    .btn-primary {
+        background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+        color: white;
+        border: none;
+        padding: 0.75rem 1.5rem;
+        border-radius: 10px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.3s ease;
+    }
+    .btn-primary:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 25px rgba(79, 70, 229, 0.4);
+    }
+    
+    .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+        gap: 1.5rem;
+        margin: 2rem 0;
+    }
+    
+    .progress-bar {
+        background: linear-gradient(90deg, #4f46e5, #7c3aed);
+        height: 8px;
+        border-radius: 4px;
+        margin: 0.5rem 0;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -1143,14 +1244,29 @@ def main():
     # Initialize cache database
     setup_coordinates_cache()
     
-    # Title and description with professional styling
-    st.markdown('<h1 class="main-header">Real Estate ROI Analysis Dashboard</h1>', unsafe_allow_html=True)
+    # Professional header with modern design
+    st.markdown("""
+    <div class="main-header">
+        <h1>🏠 Real Estate ROI Analysis Platform</h1>
+        <p>Advanced Investment Analysis & Property Intelligence Dashboard</p>
+        <div style="margin-top: 1rem; opacity: 0.8;">
+            <span style="background: rgba(255,255,255,0.2); padding: 0.5rem 1rem; border-radius: 20px; margin: 0 0.5rem;">📊 ROI Analytics</span>
+            <span style="background: rgba(255,255,255,0.2); padding: 0.5rem 1rem; border-radius: 20px; margin: 0 0.5rem;">🏘️ Property Intelligence</span>
+            <span style="background: rgba(255,255,255,0.2); padding: 0.5rem 1rem; border-radius: 20px; margin: 0 0.5rem;">🗺️ Interactive Maps</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
     
     st.markdown("""
-    **Interactive visualization of real estate Return on Investment (ROI) patterns across neighborhoods**
-    
-    The dashboard provides comprehensive analysis of property value trends, ROI performance metrics, and geographic distribution patterns to support data-driven investment decisions.
-    """)
+    <div class="info-box">
+        <h3 style="margin-top: 0;">🎯 Platform Overview</h3>
+        <p style="margin-bottom: 0;">
+            <strong>Professional-grade real estate investment analysis platform</strong> providing comprehensive ROI insights, 
+            property intelligence, and geographic visualization. Analyze market trends, identify investment opportunities, 
+            and make data-driven decisions with our advanced analytics engine.
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
     
     # Check network status
     network_status = check_network_status()
@@ -1174,16 +1290,32 @@ def main():
         st.info("Please ensure the CSV file 'Neighborhood_zhvi_uc_sfrcondo_tier_0.33_0.67_sm_sa_month.csv' is in the same directory.")
         return
     
-    # Sidebar selection with professional labels
-    selected_state = st.sidebar.selectbox("Select State", states, key="state_select")
+    # Professional sidebar with enhanced styling
+    st.sidebar.markdown('<div class="sidebar-section"><h3>📍 Location Selection</h3></div>', unsafe_allow_html=True)
+    selected_state = st.sidebar.selectbox("**State**", states, key="state_select", 
+                                        help="Select the state for analysis")
     
     if selected_state:
         counties = state_county_map[selected_state]
-        selected_county = st.sidebar.selectbox("Select County", counties, key="county_select")
+        selected_county = st.sidebar.selectbox("**County**", counties, key="county_select",
+                                             help="Select the county for detailed analysis")
         
         # Map style options
-        st.sidebar.markdown("### Visualization Options")
-        use_satellite = st.sidebar.checkbox("Satellite view", help="Use satellite imagery as base map (requires network)")
+        st.sidebar.markdown('<div class="sidebar-section"><h3>🗺️ Map Configuration</h3></div>', unsafe_allow_html=True)
+        use_satellite = st.sidebar.checkbox("Satellite View", value=False, 
+                                          help="Use satellite imagery as base map (requires network)")
+        
+        # Property data options
+        st.sidebar.markdown('<div class="sidebar-section"><h3>🏠 Property Intelligence</h3></div>', unsafe_allow_html=True)
+        load_properties = st.sidebar.checkbox("Enable Property Overlay", value=True,
+                                            help="Load OpenStreetMap property data for detailed analysis")
+        
+        if load_properties:
+            st.sidebar.markdown("**Property Display Settings**")
+            zoom_threshold = st.sidebar.slider("Zoom Threshold", min_value=8, max_value=16, value=12,
+                                            help="Properties become visible at this zoom level")
+            max_properties_display = st.sidebar.slider("Max Properties", min_value=1000, max_value=100000, value=50000,
+                                                     help="Maximum properties to display on map")
         
         # Progress indicator with professional UX
         if selected_state and selected_county:            
@@ -1252,26 +1384,64 @@ def main():
                         # Load properties if requested
                         properties_df = None
                         if load_properties:
-                            with st.spinner('Loading property data for map overlay...'):
+                            with st.spinner('Loading comprehensive property data...'):
                                 try:
                                     osm_fetcher = OpenStreetMapProperties()
-                                    # Increase property limit to show more properties on the map
+                                    # Load maximum properties for comprehensive coverage
                                     properties_df = osm_fetcher.get_county_properties(
-                                        selected_county, selected_state, max_properties=5000
+                                        selected_county, selected_state, max_properties=max_properties_display
                                     )
-                                    if not new_properties_df.empty:
-                                        st.success(f"✅ Loaded {len(properties_df)} properties")
-                                        # Show property summary
-                                        st.info(f"📊 Property types: {properties_df['building_type'].value_counts().to_dict()}")
-                                        st.info(f"📍 Properties with coordinates: {properties_df[properties_df['latitude'].notna() & properties_df['longitude'].notna()].shape[0]}")
+                                    if not properties_df.empty:
+                                        total_props = len(properties_df)
+                                        valid_coords = properties_df[properties_df['latitude'].notna() & properties_df['longitude'].notna()].shape[0]
+                                        
+                                        st.markdown(f"""
+                                        <div class="success-box">
+                                            <h4 style="margin-top: 0;">✅ Property Data Loaded Successfully</h4>
+                                            <div class="stats-grid">
+                                                <div class="metric-container">
+                                                    <strong>Total Properties</strong>
+                                                    <span style="color: #10b981; font-size: 2rem;">{total_props:,}</span>
+                                                </div>
+                                                <div class="metric-container">
+                                                    <strong>With Coordinates</strong>
+                                                    <span style="color: #3b82f6; font-size: 2rem;">{valid_coords:,}</span>
+                                                </div>
+                                                <div class="metric-container">
+                                                    <strong>Coverage Rate</strong>
+                                                    <span style="color: #8b5cf6; font-size: 2rem;">{(valid_coords/total_props*100):.1f}%</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        """, unsafe_allow_html=True)
+                                        
+                                        # Property type breakdown
+                                        if 'building_type' in properties_df.columns:
+                                            type_counts = properties_df['building_type'].value_counts().head(5)
+                                            st.markdown("**📊 Property Type Distribution**")
+                                            for prop_type, count in type_counts.items():
+                                                percentage = (count / total_props) * 100
+                                                st.markdown(f"**{prop_type.title()}**: {count:,} ({percentage:.1f}%)")
+                                                st.progress(percentage / 100)
                                     else:
-                                        st.warning("⚠️ No properties found for this county")
+                                        st.markdown("""
+                                        <div class="warning-box">
+                                            <h4 style="margin-top: 0;">⚠️ No Properties Found</h4>
+                                            <p>This could be due to limited OpenStreetMap coverage in rural areas or county boundary mismatches.</p>
+                                        </div>
+                                        """, unsafe_allow_html=True)
                                 except Exception as e:
-                                    st.error(f"❌ Error loading properties: {str(e)}")
+                                    st.markdown(f"""
+                                    <div class="warning-box">
+                                        <h4 style="margin-top: 0;">❌ Error Loading Properties</h4>
+                                        <p>Error: {str(e)}</p>
+                                        <p>This feature requires internet connection and may be rate-limited. Try again later.</p>
+                                    </div>
+                                    """, unsafe_allow_html=True)
                                     properties_df = None
                         
                         # Try to create the enhanced map with properties overlay
-                        map_chart = create_3d_roi_map_with_properties(data, use_satellite and network_available, properties_df, 12)
+                        map_chart = create_3d_roi_map_with_properties(data, use_satellite and network_available, properties_df, zoom_threshold)
                         
                         # If enhanced map fails, try fallback map
                         if not map_chart:
@@ -1281,31 +1451,48 @@ def main():
                         if map_chart:
                             st.pydeck_chart(map_chart, use_container_width=True)
                             
-                            # Enhanced legend with property information
+                            # Professional map legend
+                            st.markdown('<h4 class="section-header">Map Legend & Controls</h4>', unsafe_allow_html=True)
                             col1, col2 = st.columns(2)
                             with col1:
                                 st.markdown("""
-                                **ROI Color Legend:**
-                                - **Light Yellow**: Lower ROI
-                                - **Orange**: Medium ROI  
-                                - **Deep Red**: Higher ROI
-                                """)
+                                <div class="card">
+                                    <h5 style="margin-top: 0; color: #4f46e5;">🎨 ROI Color Legend</h5>
+                                    <ul style="margin: 0; padding-left: 1.5rem;">
+                                        <li><strong style="color: #fbbf24;">Light Yellow</strong>: Lower ROI areas</li>
+                                        <li><strong style="color: #f97316;">Orange</strong>: Medium ROI areas</li>
+                                        <li><strong style="color: #dc2626;">Deep Red</strong>: Higher ROI areas</li>
+                                    </ul>
+                                    <p style="margin: 0.5rem 0 0 0; font-size: 0.9rem; color: #6b7280;">
+                                        <em>Heatmap intensity indicates ROI performance</em>
+                                    </p>
+                                </div>
+                                """, unsafe_allow_html=True)
                             with col2:
                                 if properties_df is not None and not properties_df.empty:
                                     valid_props = properties_df[properties_df['latitude'].notna() & properties_df['longitude'].notna()]
                                     st.markdown(f"""
-                                    **Property Overlay:**
-                                    - **Blue dots**: {len(valid_props)} individual properties
-                                    - **Zoom in** to see properties clearly
-                                    - **Click properties** for details
-                                    - **Property types**: {valid_props['building_type'].value_counts().to_dict()}
-                                    """)
+                                    <div class="card">
+                                        <h5 style="margin-top: 0; color: #10b981;">🏠 Property Overlay</h5>
+                                        <ul style="margin: 0; padding-left: 1.5rem;">
+                                            <li><strong style="color: #3b82f6;">Blue dots</strong>: {len(valid_props):,} individual properties</li>
+                                            <li><strong>Zoom level {zoom_threshold}+</strong>: Properties become visible</li>
+                                            <li><strong>Click properties</strong>: View detailed information</li>
+                                        </ul>
+                                        <p style="margin: 0.5rem 0 0 0; font-size: 0.9rem; color: #6b7280;">
+                                            <em>Interactive property exploration enabled</em>
+                                        </p>
+                                    </div>
+                                    """, unsafe_allow_html=True)
                                 else:
                                     st.markdown("""
-                                    **Property Overlay:**
-                                    - No properties loaded
-                                    - Enable "Load Property Data" to see individual houses
-                                    """)
+                                    <div class="card">
+                                        <h5 style="margin-top: 0; color: #6b7280;">🏠 Property Overlay</h5>
+                                        <p style="margin: 0; color: #6b7280;">
+                                            <em>Enable "Property Overlay" in sidebar to see individual properties</em>
+                                        </p>
+                                    </div>
+                                    """, unsafe_allow_html=True)
                         else:
                             st.error("❌ Failed to create map. Please check your data and try again.")
                         
@@ -1317,33 +1504,91 @@ def main():
                         if st.session_state.clicked_property:
                             create_property_details_panel(st.session_state.clicked_property)
                     
-                    # ROI Distribution with professional styling
-                    st.markdown('<h3 class="section-header">ROI Performance Analysis</h3>', unsafe_allow_html=True)
-                    col1, col2 = st.columns(2)
+                    # ROI Performance Analysis with professional styling
+                    st.markdown('<h3 class="section-header">📈 ROI Performance Analysis</h3>', unsafe_allow_html=True)
                     
+                    # Performance overview cards
+                    col1, col2, col3, col4 = st.columns(4)
                     with col1:
-                        # Top performers
+                        top_roi_val = data['ROI'].max()
+                        st.markdown(f"""
+                        <div class="metric-container">
+                            <strong>🏆 Best ROI</strong>
+                            <span style="color: #10b981; font-size: 1.8rem;">{top_roi_val:.2f}%</span>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    with col2:
+                        bottom_roi_val = data['ROI'].min()
+                        st.markdown(f"""
+                        <div class="metric-container">
+                            <strong>📉 Lowest ROI</strong>
+                            <span style="color: #ef4444; font-size: 1.8rem;">{bottom_roi_val:.2f}%</span>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    with col3:
+                        roi_std = data['ROI'].std()
+                        st.markdown(f"""
+                        <div class="metric-container">
+                            <strong>📊 ROI Variance</strong>
+                            <span style="color: #8b5cf6; font-size: 1.8rem;">{roi_std:.2f}%</span>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    with col4:
+                        median_roi = data['ROI'].median()
+                        st.markdown(f"""
+                        <div class="metric-container">
+                            <strong>📋 Median ROI</strong>
+                            <span style="color: #f59e0b; font-size: 1.8rem;">{median_roi:.2f}%</span>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    
+                    # Top and bottom performers
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.markdown("""
+                        <div class="card">
+                            <h4 style="margin-top: 0; color: #10b981;">🏆 Top ROI Performers</h4>
+                        </div>
+                        """, unsafe_allow_html=True)
                         top_roi = data.nlargest(10, 'ROI')[['RegionName', 'ROI', 'Current_Value']]
-                        st.markdown("**Top ROI Performers**")
                         st.dataframe(top_roi, use_container_width=True, hide_index=True)
                     
                     with col2:
-                        # Bottom performers
+                        st.markdown("""
+                        <div class="card">
+                            <h4 style="margin-top: 0; color: #ef4444;">📉 Lowest ROI Areas</h4>
+                        </div>
+                        """, unsafe_allow_html=True)
                         bottom_roi = data.nsmallest(10, 'ROI')[['RegionName', 'ROI', 'Current_Value']]
-                        st.markdown("**Lowest ROI Areas**")
                         st.dataframe(bottom_roi, use_container_width=True, hide_index=True)
                     
-                    # Add data table with enhanced search and pagination
-                    with st.expander("View Complete Data Table"):
-                        st.markdown('<h3 class="section-header">Data Exploration & Filtering</h3>', unsafe_allow_html=True)
-                        # Search and filter options
+                    # Professional data exploration section
+                    with st.expander("🔍 Advanced Data Exploration & Analytics", expanded=False):
+                        st.markdown('<h3 class="section-header">📊 Data Exploration & Filtering</h3>', unsafe_allow_html=True)
+                        
+                        # Search and filter options in a professional layout
+                        st.markdown("""
+                        <div class="card">
+                            <h4 style="margin-top: 0; color: #4f46e5;">🔍 Search & Filter Controls</h4>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
                         col1, col2, col3 = st.columns(3)
                         with col1:
-                            search_term = st.text_input("Search neighborhoods:", key="search_input")
+                            search_term = st.text_input("**Search Neighborhoods:**", 
+                                                     placeholder="Enter neighborhood name...", 
+                                                     key="search_input",
+                                                     help="Search for specific neighborhoods by name")
                         with col2:
-                            min_roi = st.number_input("Min ROI %:", value=float(data['ROI'].min()), key="min_roi")
+                            min_roi = st.number_input("**Minimum ROI %:**", 
+                                                    value=float(data['ROI'].min()), 
+                                                    key="min_roi",
+                                                    help="Filter by minimum ROI percentage")
                         with col3:
-                            max_roi = st.number_input("Max ROI %:", value=float(data['ROI'].max()), key="max_roi")
+                            max_roi = st.number_input("**Maximum ROI %:**", 
+                                                    value=float(data['ROI'].max()), 
+                                                    key="max_roi",
+                                                    help="Filter by maximum ROI percentage")
                         
                         # Apply filters
                         filtered_data = data.copy()
@@ -1351,21 +1596,52 @@ def main():
                             filtered_data = filtered_data[filtered_data['RegionName'].str.contains(search_term, case=False, na=False)]
                         filtered_data = filtered_data[(filtered_data['ROI'] >= min_roi) & (filtered_data['ROI'] <= max_roi)]
                         
-                        # Sort options
-                        sort_by = st.selectbox("Sort by:", ['ROI', 'Current_Value', 'RegionName'], key="sort_select")
-                        sort_order = st.radio("Order:", ['Descending', 'Ascending'], key="sort_order", horizontal=True)
-                        ascending = sort_order == 'Ascending'
+                        # Professional sort and pagination controls
+                        st.markdown("""
+                        <div class="card">
+                            <h4 style="margin-top: 0; color: #7c3aed;">📋 Data Organization & Navigation</h4>
+                        </div>
+                        """, unsafe_allow_html=True)
                         
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            sort_by = st.selectbox("**Sort by:**", 
+                                                 ['ROI', 'Current_Value', 'RegionName'], 
+                                                 key="sort_select",
+                                                 help="Choose the column to sort the data by")
+                        with col2:
+                            sort_order = st.radio("**Sort Order:**", 
+                                                ['Descending', 'Ascending'], 
+                                                key="sort_order", 
+                                                horizontal=True,
+                                                help="Choose ascending or descending order")
+                        with col3:
+                            page_size = st.selectbox("**Items per page:**", 
+                                                   [25, 50, 100], 
+                                                   index=1, 
+                                                   key="page_size",
+                                                   help="Number of neighborhoods to display per page")
+                        
+                        ascending = sort_order == 'Ascending'
                         filtered_data = filtered_data.sort_values(sort_by, ascending=ascending)
                         
                         # Pagination
-                        page_size = st.selectbox("Items per page:", [25, 50, 100], index=1, key="page_size")
                         total_pages = max(1, (len(filtered_data) + page_size - 1) // page_size)
-                        page = st.selectbox("Page:", range(1, total_pages + 1), key="page_select")
+                        page = st.selectbox("**Page:**", 
+                                          range(1, total_pages + 1), 
+                                          key="page_select",
+                                          help="Navigate between pages of results")
                         
                         start_idx = (page - 1) * page_size
                         end_idx = start_idx + page_size
                         page_data = filtered_data.iloc[start_idx:end_idx]
+                        
+                        # Professional data display
+                        st.markdown("""
+                        <div class="card">
+                            <h4 style="margin-top: 0; color: #059669;">📊 Results Display</h4>
+                        </div>
+                        """, unsafe_allow_html=True)
                         
                         # Display table with better formatting
                         display_data = page_data[['RegionName', 'Current_Value', 'ROI', 'First_Value']].copy()
@@ -1375,16 +1651,43 @@ def main():
                         display_data.columns = ['Neighborhood', 'Current Value', 'ROI %', 'Initial Value']
                         
                         st.dataframe(display_data, use_container_width=True, hide_index=True)
-                        st.caption(f"Showing {start_idx + 1}-{min(end_idx, len(filtered_data))} of {len(filtered_data)} neighborhoods")
                         
-                        # Download data option
-                        csv_data = filtered_data.to_csv(index=False)
-                        st.download_button(
-                            label="Download filtered data as CSV",
-                            data=csv_data,
-                            file_name=f"{selected_county}_{selected_state}_roi_data.csv",
-                            mime="text/csv"
-                        )
+                        # Results summary
+                        st.markdown(f"""
+                        <div class="info-box">
+                            <p><strong>Results Summary:</strong> Showing {start_idx + 1}-{min(end_idx, len(filtered_data))} of {len(filtered_data):,} neighborhoods</p>
+                            <p><strong>Filtered Results:</strong> {len(filtered_data):,} neighborhoods match your criteria</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                        # Professional download section
+                        st.markdown("""
+                        <div class="card">
+                            <h4 style="margin-top: 0; color: #dc2626;">💾 Export & Download</h4>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            csv_data = filtered_data.to_csv(index=False)
+                            st.download_button(
+                                label="📥 Download Filtered Data (CSV)",
+                                data=csv_data,
+                                file_name=f"{selected_county}_{selected_state}_roi_data.csv",
+                                mime="text/csv",
+                                help="Download the filtered results as a CSV file"
+                            )
+                        with col2:
+                            st.markdown("""
+                            <div class="info-box">
+                                <p><strong>Export Options:</strong></p>
+                                <ul>
+                                    <li>CSV format for Excel/Google Sheets</li>
+                                    <li>Includes all filtered results</li>
+                                    <li>Ready for further analysis</li>
+                                </ul>
+                            </div>
+                            """, unsafe_allow_html=True)
                     
                     # OpenStreetMap Properties Section
                     st.markdown('<h3 class="section-header">OpenStreetMap Property Data</h3>', unsafe_allow_html=True)
