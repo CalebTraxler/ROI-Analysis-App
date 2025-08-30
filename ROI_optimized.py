@@ -14,7 +14,6 @@ import logging
 import requests
 from real_estate_api import RealEstateDataFetcher
 from enhanced_data_sources import EnhancedRealEstateDataFetcher
-from dynamic_property_loader import DynamicPropertyLoader
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -874,7 +873,7 @@ def create_3d_roi_map_optimized(data, use_satellite=False, properties_df=None):
         return deck
 
 # Dynamic property loading based on map view and zoom level
-def create_dynamic_property_map(data, use_satellite=False, selected_neighborhood=None, zoom_level=10, dynamic_properties=None):
+def create_dynamic_property_map(data, use_satellite=False, selected_neighborhood=None, zoom_level=10):
     """Create a dynamic map that loads properties based on zoom level and neighborhood selection"""
     if len(data) == 0:
         return None
@@ -1019,124 +1018,15 @@ def create_dynamic_property_map(data, use_satellite=False, selected_neighborhood
         )
     ]
     
-    # Add dynamic properties layer if available
-    if dynamic_properties and dynamic_properties.get('properties') is not None:
-        properties_df = dynamic_properties['properties']
-        
-        if not properties_df.empty and zoom >= 12:
-            valid_properties = properties_df[
-                (properties_df['latitude'].notna()) & 
-                (properties_df['longitude'].notna())
-            ].copy()
-            
-            if len(valid_properties) > 0:
-                logger.info(f"Adding {len(valid_properties)} dynamic properties to map (zoom level: {zoom})")
-                
-                # Prepare properties data with enhanced tooltips
-                properties_with_tooltips = valid_properties.copy()
-                properties_with_tooltips['tooltip_text'] = properties_with_tooltips.apply(
-                    lambda row: f"""
-                    <div style="padding: 8px; background: rgba(0,0,0,0.9); border-radius: 6px; color: white; min-width: 200px;">
-                        <h4 style="margin: 0 0 6px 0; color: #3b82f6;">🏠 {row.get('building_type', 'Property').title()}</h4>
-                        <p style="margin: 3px 0;"><strong>Address:</strong> {row.get('address', 'N/A')}</p>
-                        <p style="margin: 3px 0;"><strong>Area:</strong> {row.get('area_sqft', 0):.0f} sq ft</p>
-                        <p style="margin: 3px 0;"><strong>OSM ID:</strong> <code>{row.get('osm_id', 'N/A')}</code></p>
-                        <p style="margin: 6px 0 0 0; font-size: 11px; opacity: 0.8;">
-                            <em>Click for detailed information</em>
-                        </p>
-                    </div>
-                    """,
-                    axis=1
-                )
-                
-                # Create properties layer with click interaction
-                properties_layer = pdk.Layer(
-                    'ScatterplotLayer',
-                    properties_with_tooltips,
-                    get_position=['longitude', 'latitude'],
-                    get_radius=8,  # Smaller radius for individual properties
-                    get_fill_color=[59, 130, 246, 220],  # Blue with high opacity
-                    get_line_color=[255, 255, 255, 200],
-                    pickable=True,
-                    opacity=0.9,
-                    stroked=True,
-                    filled=True,
-                    line_width_min_pixels=1,
-                    radius_scale=1
-                )
-                
-                # Add properties layer on top
-                layers.append(properties_layer)
-                logger.info(f"Dynamic properties layer added with {len(valid_properties)} properties")
-                
-                # Update neighborhood tooltips to mention properties
-                scatter_data['tooltip_text'] = scatter_data.apply(
-                    lambda row: f"""
-                    <div style="padding: 10px; background: rgba(0,0,0,0.9); border-radius: 8px; color: white;">
-                        <h3 style="margin: 0 0 10px 0; color: #3b82f6;">{row['RegionName']}</h3>
-                        <p style="margin: 5px 0;"><strong>ROI:</strong> <span style="color: #10b981;">{row['ROI']:.1f}%</span></p>
-                        <p style="margin: 5px 0;"><strong>Current Value:</strong> <span style="color: #f59e0b;">${row['Current_Value']:,.0f}</span></p>
-                        <p style="margin: 5px 0;"><strong>Properties Loaded:</strong> <span style="color: #3b82f6;">{len(valid_properties)} houses</span></p>
-                        <p style="margin: 10px 0 0 0; font-size: 12px; opacity: 0.8;">
-                            <em>🏠 Individual houses are now visible on the map</em>
-                        </p>
-                    </div>
-                    """,
-                    axis=1
-                )
-        
-        # Add property clusters for lower zoom levels
-        if dynamic_properties.get('clusters') and zoom < 14:
-            clusters = dynamic_properties['clusters']
-            if clusters:
-                logger.info(f"Adding {len(clusters)} property clusters for zoom level {zoom}")
-                
-                # Create clusters data
-                clusters_data = pd.DataFrame([
-                    {
-                        'latitude': cluster.center_lat,
-                        'longitude': cluster.center_lon,
-                        'property_count': cluster.property_count,
-                        'tooltip_text': f"""
-                        <div style="padding: 8px; background: rgba(0,0,0,0.9); border-radius: 6px; color: white;">
-                            <h4 style="margin: 0 0 6px 0; color: #f59e0b;">🏘️ Property Cluster</h4>
-                            <p style="margin: 3px 0;"><strong>Properties:</strong> {cluster.property_count}</p>
-                            <p style="margin: 6px 0 0 0; font-size: 11px; opacity: 0.8;">
-                                <em>Zoom in to see individual properties</em>
-                            </p>
-                        </div>
-                        """
-                    }
-                    for cluster in clusters
-                ])
-                
-                # Create clusters layer
-                clusters_layer = pdk.Layer(
-                    'ScatterplotLayer',
-                    clusters_data,
-                    get_position=['longitude', 'latitude'],
-                    get_radius=20,  # Larger radius for clusters
-                    get_fill_color=[245, 158, 11, 180],  # Orange for clusters
-                    get_line_color=[255, 255, 255, 200],
-                    pickable=True,
-                    opacity=0.8,
-                    stroked=True,
-                    filled=True,
-                    line_width_min_pixels=2,
-                    radius_scale=1
-                )
-                
-                layers.append(clusters_layer)
-    
-    # Fallback to old properties system if dynamic loading not available
-    elif properties_df is not None and not properties_df.empty and zoom >= 12:
+    # Add properties layer only if zoomed in enough and properties available
+    if properties_df is not None and not properties_df.empty and zoom >= 12:
         valid_properties = properties_df[
             (properties_df['latitude'].notna()) & 
             (properties_df['longitude'].notna())
         ].copy()
         
         if len(valid_properties) > 0:
-            logger.info(f"Adding {len(valid_properties)} fallback properties to map (zoom level: {zoom})")
+            logger.info(f"Adding {len(valid_properties)} properties to map (zoom level: {zoom})")
             
             # Prepare properties data with enhanced tooltips
             properties_with_tooltips = valid_properties.copy()
@@ -1167,7 +1057,7 @@ def create_dynamic_property_map(data, use_satellite=False, selected_neighborhood
             
             # Add properties layer on top
             layers.append(properties_layer)
-            logger.info(f"Fallback properties layer added with {len(valid_properties)} properties")
+            logger.info(f"Properties layer added with {len(valid_properties)} properties")
             
             # Update neighborhood tooltips to mention properties
             scatter_data['tooltip_text'] = scatter_data.apply(
@@ -1449,10 +1339,6 @@ def main():
         st.session_state.clicked_property = None
     if 'selected_neighborhood' not in st.session_state:
         st.session_state.selected_neighborhood = None
-    if 'current_map_view' not in st.session_state:
-        st.session_state.current_map_view = None
-    if 'dynamic_properties' not in st.session_state:
-        st.session_state.dynamic_properties = None
     
     # Initialize cache database
     setup_coordinates_cache()
@@ -1550,18 +1436,10 @@ def main():
         enable_transit_score = st.sidebar.checkbox("Transit Score", value=True,
                                                  help="Calculate transit accessibility score")
         
-        # Dynamic property loading
-        st.sidebar.markdown("**🗺️ Dynamic Property Loading**")
-        enable_dynamic_loading = st.sidebar.checkbox("Dynamic Property Loading", value=True,
-                                                   help="Load properties based on zoom level and map view")
-        if enable_dynamic_loading:
-            st.sidebar.markdown("**Property Loading Settings**")
-            min_zoom_for_properties = st.sidebar.slider("Min Zoom for Properties", min_value=8, max_value=16, value=12,
-                                                      help="Properties start appearing at this zoom level")
-            max_properties_per_view = st.sidebar.slider("Max Properties per View", min_value=100, max_value=5000, value=1000,
-                                                      help="Maximum properties to load at once")
-            enable_property_clustering = st.sidebar.checkbox("Property Clustering", value=True,
-                                                           help="Cluster properties at lower zoom levels")
+        # Neighborhood boundary analysis
+        st.sidebar.markdown("**🗺️ Neighborhood Boundaries**")
+        enable_boundary_analysis = st.sidebar.checkbox("Use Precise Boundaries", value=False,
+                                                     help="Get Zillow-like neighborhood boundaries and load comprehensive OSM data within them")
     
     # Property data options
     st.sidebar.markdown('<div class="sidebar-section"><h3>🏠 Property Intelligence</h3></div>', unsafe_allow_html=True)
@@ -1685,6 +1563,40 @@ def main():
                                         center_lat, center_lon, radius_miles=1.0
                                     )
                                 
+                                # Neighborhood boundary analysis (Zillow-like functionality)
+                                if enable_boundary_analysis and st.session_state.selected_neighborhood:
+                                    st.info("🔍 Loading precise neighborhood boundaries and comprehensive OSM data...")
+                                    try:
+                                        # Get comprehensive data within neighborhood boundary
+                                        neighborhood_comprehensive = enhanced_fetcher.get_neighborhood_with_comprehensive_data(
+                                            st.session_state.selected_neighborhood,
+                                            selected_county,  # Use county as city
+                                            selected_state
+                                        )
+                                        
+                                        if neighborhood_comprehensive:
+                                            enhanced_data['boundary_analysis'] = neighborhood_comprehensive
+                                            st.success(f"✅ Loaded comprehensive data for {st.session_state.selected_neighborhood}")
+                                            
+                                            # Display boundary summary
+                                            summary = neighborhood_comprehensive.get('summary', {})
+                                            st.sidebar.markdown(f"""
+                                            <div class="info-box">
+                                                <h4>🗺️ {st.session_state.selected_neighborhood}</h4>
+                                                <p><strong>Area:</strong> {summary.get('boundary_area_sq_miles', 0):.2f} sq miles</p>
+                                                <p><strong>Buildings:</strong> {summary.get('total_buildings', 0):,}</p>
+                                                <p><strong>Amenities:</strong> {summary.get('total_amenities', 0):,}</p>
+                                                <p><strong>Streets:</strong> {summary.get('total_streets', 0):,}</p>
+                                                <p><strong>Building Density:</strong> {summary.get('building_density', 0):.1f}/sq mile</p>
+                                            </div>
+                                            """, unsafe_allow_html=True)
+                                        else:
+                                            st.warning(f"⚠️ Could not load boundary data for {st.session_state.selected_neighborhood}")
+                                            
+                                    except Exception as e:
+                                        st.warning(f"⚠️ Boundary analysis failed: {e}")
+                                        logger.warning(f"Boundary analysis failed: {e}")
+                                
                                 st.success("✅ Enhanced data loaded successfully!")
                                 
                             except Exception as e:
@@ -1766,87 +1678,8 @@ def main():
                             </div>
                             """, unsafe_allow_html=True)
                         
-                        # Initialize dynamic property loader if enabled
-                        if enable_enhanced_data and enable_dynamic_loading:
-                            try:
-                                dynamic_loader = DynamicPropertyLoader()
-                                
-                                # Get center coordinates for current view
-                                center_lat = data['Latitude'].mean()
-                                center_lon = data['Longitude'].mean()
-                                
-                                # Load properties for current zoom level
-                                dynamic_result = dynamic_loader.get_zoom_appropriate_properties(
-                                    center_lat, center_lon, zoom_threshold
-                                )
-                                
-                                # Store in session state for use in map
-                                st.session_state.dynamic_properties = dynamic_result
-                                
-                                st.success(f"✅ Loaded {dynamic_result['total_properties']} properties for zoom level {zoom_threshold}")
-                                
-                            except Exception as e:
-                                st.warning(f"⚠️ Dynamic property loading failed: {e}")
-                                st.session_state.dynamic_properties = None
-                        
-                        # Create the dynamic property map with selected neighborhood and dynamic properties
-                        map_chart = create_dynamic_property_map(
-                            data, 
-                            use_satellite and network_available, 
-                            st.session_state.selected_neighborhood, 
-                            zoom_threshold,
-                            st.session_state.dynamic_properties
-                        )
-                        
-                        # Add map view tracking for dynamic property loading
-                        if enable_dynamic_loading and map_chart:
-                                st.markdown("""
-                                <div class="info-box">
-                                    <h4 style="margin-top: 0;">🗺️ Dynamic Property Loading Active</h4>
-                                    <p><strong>How it works:</strong></p>
-                                    <ul style="margin: 0.5rem 0; padding-left: 1.5rem;">
-                                        <li><strong>Zoom Level 8-10:</strong> Neighborhood overview only</li>
-                                        <li><strong>Zoom Level 12-13:</strong> Property clusters appear (orange dots)</li>
-                                        <li><strong>Zoom Level 14+:</strong> Individual houses appear (blue dots)</li>
-                                        <li><strong>Real-time loading:</strong> Properties load based on current map view</li>
-                                    </ul>
-                                    <p style="margin: 0.5rem 0 0 0; font-size: 0.9rem; color: #6b7280;">
-                                        <em>Properties are automatically loaded from OpenStreetMap based on your zoom level and map position.</em>
-                                    </p>
-                                </div>
-                                """, unsafe_allow_html=True)
-                                
-                                # Display property loading summary
-                                if st.session_state.dynamic_properties:
-                                    props_data = st.session_state.dynamic_properties
-                                    col1, col2, col3, col4 = st.columns(4)
-                                    
-                                    with col1:
-                                        st.metric("Properties Loaded", f"{props_data['total_properties']:,}")
-                                    with col2:
-                                        st.metric("Property Clusters", f"{props_data['total_clusters']:,}")
-                                    with col3:
-                                        st.metric("Current Zoom", f"{zoom_threshold}")
-                                    with col4:
-                                        area_size = (props_data['bounds']['max_lat'] - props_data['bounds']['min_lat']) * (props_data['bounds']['max_lon'] - props_data['bounds']['min_lon'])
-                                        st.metric("View Area", f"{area_size:.4f}°²")
-                                    
-                                    # Show property type breakdown if available
-                                    if props_data['properties'] is not None and not props_data['properties'].empty:
-                                        with st.expander("🏠 Property Details Breakdown", expanded=False):
-                                            st.markdown("**Property Types in Current View:**")
-                                            type_counts = props_data['properties']['building_type'].value_counts()
-                                            st.bar_chart(type_counts)
-                                            
-                                            st.markdown("**Property Statistics:**")
-                                            col1, col2 = st.columns(2)
-                                            with col1:
-                                                if 'area_sqft' in props_data['properties'].columns:
-                                                    avg_area = props_data['properties']['area_sqft'].mean()
-                                                    st.metric("Average Property Size", f"{avg_area:.0f} sq ft")
-                                            with col2:
-                                                total_area = props_data['properties']['area_sqft'].sum()
-                                                st.metric("Total Property Area", f"{total_area:,.0f} sq ft")
+                        # Create the dynamic property map with selected neighborhood
+                        map_chart = create_dynamic_property_map(data, use_satellite and network_available, st.session_state.selected_neighborhood, zoom_threshold)
                         
                         # If enhanced map fails, try fallback map
                         if not map_chart:
@@ -1960,7 +1793,7 @@ def main():
                         st.markdown('<h3 class="section-header">🔍 Enhanced Data Details</h3>', unsafe_allow_html=True)
                         
                         # Create tabs for different data types
-                        tab1, tab2, tab3, tab4 = st.tabs(["🏪 Amenities", "📊 Census Data", "🏠 Property Details", "🗺️ Interactive Map"])
+                        tab1, tab2, tab3, tab4, tab5 = st.tabs(["🏪 Amenities", "📊 Census Data", "🏠 Property Details", "🗺️ Interactive Map", "🗺️ Boundary Analysis"])
                         
                         with tab1:
                             if 'amenities' in enhanced_data:
@@ -2064,6 +1897,105 @@ def main():
                                         
                                 except Exception as e:
                                     st.error(f"Error creating interactive map: {e}")
+                        
+                        with tab5:
+                            if 'boundary_analysis' in enhanced_data:
+                                st.markdown("### 🗺️ Neighborhood Boundary Analysis")
+                                
+                                boundary_data = enhanced_data['boundary_analysis']
+                                neighborhood_info = boundary_data.get('neighborhood_info', {})
+                                summary = boundary_data.get('summary', {})
+                                
+                                # Display neighborhood information
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    st.markdown(f"**Neighborhood:** {neighborhood_info.get('name', 'N/A')}")
+                                    st.markdown(f"**City:** {neighborhood_info.get('city', 'N/A')}")
+                                    st.markdown(f"**State:** {neighborhood_info.get('state', 'N/A')}")
+                                    st.markdown(f"**Boundary Area:** {neighborhood_info.get('boundary_area_sq_miles', 0):.2f} sq miles")
+                                
+                                with col2:
+                                    st.markdown(f"**Total Buildings:** {summary.get('total_buildings', 0):,}")
+                                    st.markdown(f"**Total Amenities:** {summary.get('total_amenities', 0):,}")
+                                    st.markdown(f"**Total Streets:** {summary.get('total_streets', 0):,}")
+                                    st.markdown(f"**Building Density:** {summary.get('building_density', 0):.1f}/sq mile")
+                                
+                                # Display detailed building information
+                                if boundary_data.get('buildings'):
+                                    st.markdown("### 🏠 Buildings Within Boundary")
+                                    buildings_df = pd.DataFrame([
+                                        {
+                                            'Type': building.get('building_type', 'N/A'),
+                                            'Area (sq ft)': f"{building.get('area_sqft', 0):.0f}",
+                                            'Year Built': building.get('year_built', 'N/A'),
+                                            'Stories': building.get('stories', 'N/A'),
+                                            'Address': f"{building.get('address', {}).get('housenumber', '')} {building.get('address', {}).get('street', '')}".strip() or 'N/A'
+                                        }
+                                        for building in boundary_data['buildings'][:100]  # Show first 100
+                                    ])
+                                    
+                                    st.dataframe(buildings_df, use_container_width=True, hide_index=True)
+                                    
+                                    if len(boundary_data['buildings']) > 100:
+                                        st.info(f"Showing first 100 of {len(boundary_data['buildings'])} buildings")
+                                
+                                # Display street network information
+                                if boundary_data.get('streets'):
+                                    st.markdown("### 🛣️ Street Network Within Boundary")
+                                    streets_df = pd.DataFrame([
+                                        {
+                                            'Name': street.get('name', 'N/A'),
+                                            'Type': street.get('highway_type', 'N/A'),
+                                            'Lanes': street.get('lanes', 'N/A'),
+                                            'Surface': street.get('surface', 'N/A'),
+                                            'Speed Limit': street.get('speed_limit', 'N/A')
+                                        }
+                                        for street in boundary_data['streets'][:50]  # Show first 50
+                                    ])
+                                    
+                                    st.dataframe(streets_df, use_container_width=True, hide_index=True)
+                                    
+                                    if len(boundary_data['streets']) > 50:
+                                        st.info(f"Showing first 50 of {len(boundary_data['streets'])} street segments")
+                                
+                                # Display land use information
+                                if boundary_data.get('landuse'):
+                                    st.markdown("### 🏞️ Land Use Within Boundary")
+                                    landuse_df = pd.DataFrame([
+                                        {
+                                            'Type': feature.get('landuse_type', 'N/A'),
+                                            'Name': feature.get('name', 'N/A')
+                                        }
+                                        for feature in boundary_data['landuse']
+                                    ])
+                                    
+                                    st.dataframe(landuse_df, use_container_width=True, hide_index=True)
+                                
+                                # Display natural features
+                                if boundary_data.get('natural_features'):
+                                    st.markdown("### 🌳 Natural Features Within Boundary")
+                                    natural_df = pd.DataFrame([
+                                        {
+                                            'Type': feature.get('natural_type', 'N/A'),
+                                            'Name': feature.get('name', 'N/A')
+                                        }
+                                        for feature in boundary_data['natural_features']
+                                    ])
+                                    
+                                    st.dataframe(natural_df, use_container_width=True, hide_index=True)
+                                
+                            else:
+                                st.markdown("### 🗺️ Neighborhood Boundary Analysis")
+                                st.info("Enable 'Use Precise Boundaries' in the sidebar and select a neighborhood to see detailed boundary analysis.")
+                                st.markdown("""
+                                **What you'll get with boundary analysis:**
+                                - 🏠 **Precise neighborhood boundaries** (like Zillow)
+                                - 🏗️ **All buildings within the boundary**
+                                - 🛣️ **Complete street network**
+                                - 🏞️ **Land use classifications**
+                                - 🌳 **Natural features**
+                                - 📊 **Density calculations**
+                                """)
                     
                     # Professional data exploration section
                     with st.expander("🔍 Advanced Data Exploration & Analytics", expanded=False):
