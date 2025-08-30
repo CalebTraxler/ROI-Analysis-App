@@ -1435,11 +1435,6 @@ def main():
                                               help="Calculate walkability based on nearby amenities")
         enable_transit_score = st.sidebar.checkbox("Transit Score", value=True,
                                                  help="Calculate transit accessibility score")
-        
-        # Neighborhood boundary analysis
-        st.sidebar.markdown("**🗺️ Neighborhood Boundaries**")
-        enable_boundary_analysis = st.sidebar.checkbox("Use Precise Boundaries", value=False,
-                                                     help="Get Zillow-like neighborhood boundaries and load comprehensive OSM data within them")
     
     # Property data options
     st.sidebar.markdown('<div class="sidebar-section"><h3>🏠 Property Intelligence</h3></div>', unsafe_allow_html=True)
@@ -1562,40 +1557,6 @@ def main():
                                     enhanced_data['street_network'] = enhanced_fetcher.get_street_network(
                                         center_lat, center_lon, radius_miles=1.0
                                     )
-                                
-                                # Neighborhood boundary analysis (Zillow-like functionality)
-                                if enable_boundary_analysis and st.session_state.selected_neighborhood:
-                                    st.info("🔍 Loading precise neighborhood boundaries and comprehensive OSM data...")
-                                    try:
-                                        # Get comprehensive data within neighborhood boundary
-                                        neighborhood_comprehensive = enhanced_fetcher.get_neighborhood_with_comprehensive_data(
-                                            st.session_state.selected_neighborhood,
-                                            selected_county,  # Use county as city
-                                            selected_state
-                                        )
-                                        
-                                        if neighborhood_comprehensive:
-                                            enhanced_data['boundary_analysis'] = neighborhood_comprehensive
-                                            st.success(f"✅ Loaded comprehensive data for {st.session_state.selected_neighborhood}")
-                                            
-                                            # Display boundary summary
-                                            summary = neighborhood_comprehensive.get('summary', {})
-                                            st.sidebar.markdown(f"""
-                                            <div class="info-box">
-                                                <h4>🗺️ {st.session_state.selected_neighborhood}</h4>
-                                                <p><strong>Area:</strong> {summary.get('boundary_area_sq_miles', 0):.2f} sq miles</p>
-                                                <p><strong>Buildings:</strong> {summary.get('total_buildings', 0):,}</p>
-                                                <p><strong>Amenities:</strong> {summary.get('total_amenities', 0):,}</p>
-                                                <p><strong>Streets:</strong> {summary.get('total_streets', 0):,}</p>
-                                                <p><strong>Building Density:</strong> {summary.get('building_density', 0):.1f}/sq mile</p>
-                                            </div>
-                                            """, unsafe_allow_html=True)
-                                        else:
-                                            st.warning(f"⚠️ Could not load boundary data for {st.session_state.selected_neighborhood}")
-                                            
-                                    except Exception as e:
-                                        st.warning(f"⚠️ Boundary analysis failed: {e}")
-                                        logger.warning(f"Boundary analysis failed: {e}")
                                 
                                 st.success("✅ Enhanced data loaded successfully!")
                                 
@@ -1793,7 +1754,7 @@ def main():
                         st.markdown('<h3 class="section-header">🔍 Enhanced Data Details</h3>', unsafe_allow_html=True)
                         
                         # Create tabs for different data types
-                        tab1, tab2, tab3, tab4, tab5 = st.tabs(["🏪 Amenities", "📊 Census Data", "🏠 Property Details", "🗺️ Interactive Map", "🗺️ Boundary Analysis"])
+                        tab1, tab2, tab3, tab4 = st.tabs(["🏪 Amenities", "📊 Census Data", "🏠 Property Details", "🗺️ Interactive Map"])
                         
                         with tab1:
                             if 'amenities' in enhanced_data:
@@ -1897,105 +1858,6 @@ def main():
                                         
                                 except Exception as e:
                                     st.error(f"Error creating interactive map: {e}")
-                        
-                        with tab5:
-                            if 'boundary_analysis' in enhanced_data:
-                                st.markdown("### 🗺️ Neighborhood Boundary Analysis")
-                                
-                                boundary_data = enhanced_data['boundary_analysis']
-                                neighborhood_info = boundary_data.get('neighborhood_info', {})
-                                summary = boundary_data.get('summary', {})
-                                
-                                # Display neighborhood information
-                                col1, col2 = st.columns(2)
-                                with col1:
-                                    st.markdown(f"**Neighborhood:** {neighborhood_info.get('name', 'N/A')}")
-                                    st.markdown(f"**City:** {neighborhood_info.get('city', 'N/A')}")
-                                    st.markdown(f"**State:** {neighborhood_info.get('state', 'N/A')}")
-                                    st.markdown(f"**Boundary Area:** {neighborhood_info.get('boundary_area_sq_miles', 0):.2f} sq miles")
-                                
-                                with col2:
-                                    st.markdown(f"**Total Buildings:** {summary.get('total_buildings', 0):,}")
-                                    st.markdown(f"**Total Amenities:** {summary.get('total_amenities', 0):,}")
-                                    st.markdown(f"**Total Streets:** {summary.get('total_streets', 0):,}")
-                                    st.markdown(f"**Building Density:** {summary.get('building_density', 0):.1f}/sq mile")
-                                
-                                # Display detailed building information
-                                if boundary_data.get('buildings'):
-                                    st.markdown("### 🏠 Buildings Within Boundary")
-                                    buildings_df = pd.DataFrame([
-                                        {
-                                            'Type': building.get('building_type', 'N/A'),
-                                            'Area (sq ft)': f"{building.get('area_sqft', 0):.0f}",
-                                            'Year Built': building.get('year_built', 'N/A'),
-                                            'Stories': building.get('stories', 'N/A'),
-                                            'Address': f"{building.get('address', {}).get('housenumber', '')} {building.get('address', {}).get('street', '')}".strip() or 'N/A'
-                                        }
-                                        for building in boundary_data['buildings'][:100]  # Show first 100
-                                    ])
-                                    
-                                    st.dataframe(buildings_df, use_container_width=True, hide_index=True)
-                                    
-                                    if len(boundary_data['buildings']) > 100:
-                                        st.info(f"Showing first 100 of {len(boundary_data['buildings'])} buildings")
-                                
-                                # Display street network information
-                                if boundary_data.get('streets'):
-                                    st.markdown("### 🛣️ Street Network Within Boundary")
-                                    streets_df = pd.DataFrame([
-                                        {
-                                            'Name': street.get('name', 'N/A'),
-                                            'Type': street.get('highway_type', 'N/A'),
-                                            'Lanes': street.get('lanes', 'N/A'),
-                                            'Surface': street.get('surface', 'N/A'),
-                                            'Speed Limit': street.get('speed_limit', 'N/A')
-                                        }
-                                        for street in boundary_data['streets'][:50]  # Show first 50
-                                    ])
-                                    
-                                    st.dataframe(streets_df, use_container_width=True, hide_index=True)
-                                    
-                                    if len(boundary_data['streets']) > 50:
-                                        st.info(f"Showing first 50 of {len(boundary_data['streets'])} street segments")
-                                
-                                # Display land use information
-                                if boundary_data.get('landuse'):
-                                    st.markdown("### 🏞️ Land Use Within Boundary")
-                                    landuse_df = pd.DataFrame([
-                                        {
-                                            'Type': feature.get('landuse_type', 'N/A'),
-                                            'Name': feature.get('name', 'N/A')
-                                        }
-                                        for feature in boundary_data['landuse']
-                                    ])
-                                    
-                                    st.dataframe(landuse_df, use_container_width=True, hide_index=True)
-                                
-                                # Display natural features
-                                if boundary_data.get('natural_features'):
-                                    st.markdown("### 🌳 Natural Features Within Boundary")
-                                    natural_df = pd.DataFrame([
-                                        {
-                                            'Type': feature.get('natural_type', 'N/A'),
-                                            'Name': feature.get('name', 'N/A')
-                                        }
-                                        for feature in boundary_data['natural_features']
-                                    ])
-                                    
-                                    st.dataframe(natural_df, use_container_width=True, hide_index=True)
-                                
-                            else:
-                                st.markdown("### 🗺️ Neighborhood Boundary Analysis")
-                                st.info("Enable 'Use Precise Boundaries' in the sidebar and select a neighborhood to see detailed boundary analysis.")
-                                st.markdown("""
-                                **What you'll get with boundary analysis:**
-                                - 🏠 **Precise neighborhood boundaries** (like Zillow)
-                                - 🏗️ **All buildings within the boundary**
-                                - 🛣️ **Complete street network**
-                                - 🏞️ **Land use classifications**
-                                - 🌳 **Natural features**
-                                - 📊 **Density calculations**
-                                """)
                     
                     # Professional data exploration section
                     with st.expander("🔍 Advanced Data Exploration & Analytics", expanded=False):

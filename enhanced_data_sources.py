@@ -93,28 +93,12 @@ class EnhancedRealEstateDataFetcher:
     def get_neighborhood_amenities(self, 
                                  center_lat: float, 
                                  center_lon: float, 
-                                 radius_miles: float = 1.0,
-                                 boundary_polygon: Optional[Polygon] = None) -> Dict[str, List[AmenityData]]:
+                                 radius_miles: float = 1.0) -> Dict[str, List[AmenityData]]:
         """
         Get neighborhood amenities using OSMnx and Overpass API
         Returns amenities categorized by type
-        
-        Args:
-            center_lat: Center latitude (fallback if no boundary)
-            center_lon: Center longitude (fallback if no boundary)
-            radius_miles: Radius in miles (fallback if no boundary)
-            boundary_polygon: Precise neighborhood boundary polygon (preferred)
         """
-        if boundary_polygon:
-            logger.info(f"Fetching amenities within defined neighborhood boundary")
-            # Use the precise boundary polygon
-            bbox = boundary_polygon.bounds  # Get bounding box
-            center_lat = (bbox[1] + bbox[3]) / 2  # Average of min/max lat
-            center_lon = (bbox[0] + bbox[2]) / 2  # Average of min/max lon
-            # Calculate radius from boundary for fallback
-            radius_miles = max(bbox[2] - bbox[0], bbox[3] - bbox[1]) * 69  # Convert degrees to miles
-        else:
-            logger.info(f"Fetching amenities within {radius_miles} miles of ({center_lat}, {center_lon})")
+        logger.info(f"Fetching amenities within {radius_miles} miles of ({center_lat}, {center_lon})")
         
         try:
             # Convert miles to meters
@@ -413,82 +397,6 @@ class EnhancedRealEstateDataFetcher:
             logger.error(f"Error fetching property boundaries: {e}")
             return []
     
-    def get_neighborhood_boundary(self, 
-                                neighborhood_name: str, 
-                                city: str, 
-                                state: str) -> Optional[Polygon]:
-        """
-        Get precise neighborhood boundary from OpenStreetMap
-        Similar to Zillow's neighborhood definitions
-        """
-        logger.info(f"Fetching neighborhood boundary for {neighborhood_name}, {city}, {state}")
-        
-        try:
-            # Search for neighborhood boundary using OSM
-            # Look for administrative boundaries and named places
-            query = f"{neighborhood_name}, {city}, {state}, USA"
-            
-            # Try to get neighborhood boundary from OSM
-            # This looks for administrative boundaries, named places, and residential areas
-            boundary_tags = [
-                {'boundary': 'administrative', 'admin_level': '10'},  # Neighborhood level
-                {'place': 'neighbourhood'},  # Named neighborhoods
-                {'landuse': 'residential'},  # Residential areas
-                {'name': neighborhood_name}  # Exact name match
-            ]
-            
-            for tags in boundary_tags:
-                try:
-                    # Search for boundaries with these tags
-                    boundaries = ox.geometries_from_place(
-                        query,
-                        tags=tags
-                    )
-                    
-                    if not boundaries.empty:
-                        # Find the boundary that best matches our neighborhood
-                        for idx, boundary in boundaries.iterrows():
-                            if boundary.geometry and hasattr(boundary.geometry, 'area'):
-                                # Check if this is a reasonable size for a neighborhood
-                                area_sq_miles = boundary.geometry.area * 0.000000386102  # Convert sq meters to sq miles
-                                
-                                # Neighborhoods are typically 0.1 to 5 square miles
-                                if 0.1 <= area_sq_miles <= 5.0:
-                                    logger.info(f"Found neighborhood boundary: {area_sq_miles:.2f} sq miles")
-                                    return boundary.geometry
-                        
-                        # If no reasonable size found, use the first boundary
-                        if boundaries.iloc[0].geometry:
-                            logger.info("Using first available boundary")
-                            return boundaries.iloc[0].geometry
-                
-                except Exception as e:
-                    logger.warning(f"Failed to fetch boundary with tags {tags}: {e}")
-                    continue
-            
-            # Fallback: create a rough boundary using geocoding
-            logger.info("Creating fallback boundary using geocoding")
-            try:
-                # Get the center point of the neighborhood
-                geocoder_result = ox.geocoder.geocode(query)
-                if geocoder_result:
-                    lat, lon = geocoder_result
-                    # Create a rough circular boundary (0.5 mile radius)
-                    from shapely.geometry import Point
-                    center_point = Point(lon, lat)
-                    rough_boundary = center_point.buffer(0.008)  # Roughly 0.5 miles
-                    logger.info("Created fallback circular boundary")
-                    return rough_boundary
-            except Exception as e:
-                logger.warning(f"Fallback boundary creation failed: {e}")
-            
-            logger.warning(f"No boundary found for {neighborhood_name}")
-            return None
-            
-        except Exception as e:
-            logger.error(f"Error fetching neighborhood boundary: {e}")
-            return None
-    
     def get_street_network(self, 
                           center_lat: float, 
                           center_lon: float, 
@@ -657,214 +565,6 @@ class EnhancedRealEstateDataFetcher:
             logger.error(f"Error creating interactive map: {e}")
             return None
     
-    def get_comprehensive_osm_data_within_boundary(self, 
-                                                 boundary_polygon: Polygon,
-                                                 neighborhood_name: str = "Unknown") -> Dict[str, Any]:
-        """
-        Get comprehensive OSM data within a specific neighborhood boundary
-        This loads much more detailed data within the precise area
-        """
-        logger.info(f"Loading comprehensive OSM data within {neighborhood_name} boundary")
-        
-        try:
-            # Get the bounding box of the boundary
-            bbox = boundary_polygon.bounds
-            min_lon, min_lat, max_lon, max_lat = bbox
-            
-            # Calculate center for fallback operations
-            center_lat = (min_lat + max_lat) / 2
-            center_lon = (min_lon + max_lon) / 2
-            
-            comprehensive_data = {
-                'boundary': boundary_polygon,
-                'bbox': bbox,
-                'center': (center_lat, center_lon),
-                'amenities': {},
-                'buildings': [],
-                'streets': [],
-                'landuse': [],
-                'natural_features': [],
-                'transport': [],
-                'summary': {}
-            }
-            
-            # 1. Get ALL buildings within the boundary
-            logger.info("Loading buildings within boundary...")
-            try:
-                buildings = ox.geometries_from_bbox(
-                    north=max_lat, south=min_lat, 
-                    east=max_lon, west=min_lon,
-                    tags={'building': True}
-                )
-                
-                if not buildings.empty:
-                    for idx, building in buildings.iterrows():
-                        if building.geometry and boundary_polygon.contains(building.geometry):
-                            building_data = {
-                                'osm_id': idx,
-                                'building_type': building.get('building', 'unknown'),
-                                'geometry': building.geometry,
-                                'area_sqft': building.geometry.area * 10.764 if hasattr(building.geometry, 'area') else 0,
-                                'address': {
-                                    'housenumber': building.get('addr:housenumber', ''),
-                                    'street': building.get('addr:street', ''),
-                                    'city': building.get('addr:city', ''),
-                                    'state': building.get('addr:state', ''),
-                                    'postcode': building.get('addr:postcode', '')
-                                },
-                                'year_built': building.get('start_date', None),
-                                'stories': building.get('building:levels', None),
-                                'roof_type': building.get('roof:type', None),
-                                'material': building.get('building:material', None)
-                            }
-                            comprehensive_data['buildings'].append(building_data)
-                
-                logger.info(f"Loaded {len(comprehensive_data['buildings'])} buildings")
-                
-            except Exception as e:
-                logger.warning(f"Failed to load buildings: {e}")
-            
-            # 2. Get ALL amenities within the boundary
-            logger.info("Loading amenities within boundary...")
-            amenity_types = {
-                'education': ['school', 'university', 'college', 'kindergarten', 'library'],
-                'healthcare': ['hospital', 'clinic', 'pharmacy', 'doctor', 'dentist', 'veterinary'],
-                'shopping': ['supermarket', 'mall', 'shop', 'convenience', 'department_store', 'clothes'],
-                'dining': ['restaurant', 'cafe', 'bar', 'fast_food', 'bakery', 'ice_cream'],
-                'recreation': ['park', 'playground', 'sports_centre', 'gym', 'swimming_pool', 'tennis_court'],
-                'transport': ['bus_station', 'subway_station', 'train_station', 'parking', 'taxi', 'bicycle_parking'],
-                'services': ['bank', 'post_office', 'police', 'fire_station', 'townhall', 'courthouse'],
-                'entertainment': ['cinema', 'theatre', 'museum', 'gallery', 'bowling_alley', 'casino']
-            }
-            
-            for category, types in amenity_types.items():
-                category_amenities = []
-                
-                for amenity_type in types:
-                    try:
-                        amenities = ox.geometries_from_bbox(
-                            north=max_lat, south=min_lat, 
-                            east=max_lon, west=min_lon,
-                            tags={'amenity': amenity_type}
-                        )
-                        
-                        if not amenities.empty:
-                            for idx, amenity in amenities.iterrows():
-                                if amenity.geometry and boundary_polygon.contains(amenity.geometry):
-                                    amenity_data = AmenityData(
-                                        name=amenity.get('name', f'{amenity_type.title()}'),
-                                        amenity_type=amenity_type,
-                                        latitude=amenity.geometry.y,
-                                        longitude=amenity.geometry.x,
-                                        distance_miles=0,  # Within boundary
-                                        address=amenity.get('addr:street', None),
-                                        phone=amenity.get('phone', None),
-                                        website=amenity.get('website', None)
-                                    )
-                                    category_amenities.append(amenity_data)
-                        
-                        time.sleep(0.05)  # Rate limiting
-                        
-                    except Exception as e:
-                        logger.warning(f"Failed to fetch {amenity_type} amenities: {e}")
-                        continue
-                
-                comprehensive_data['amenities'][category] = category_amenities
-            
-            # 3. Get street network within boundary
-            logger.info("Loading street network within boundary...")
-            try:
-                streets = ox.geometries_from_bbox(
-                    north=max_lat, south=min_lat, 
-                    east=max_lon, west=min_lon,
-                    tags={'highway': True}
-                )
-                
-                if not streets.empty:
-                    for idx, street in streets.iterrows():
-                        if street.geometry and boundary_polygon.intersects(street.geometry):
-                            street_data = {
-                                'osm_id': idx,
-                                'name': street.get('name', 'Unnamed Street'),
-                                'highway_type': street.get('highway', 'unknown'),
-                                'geometry': street.geometry,
-                                'lanes': street.get('lanes', None),
-                                'surface': street.get('surface', None),
-                                'speed_limit': street.get('maxspeed', None)
-                            }
-                            comprehensive_data['streets'].append(street_data)
-                
-                logger.info(f"Loaded {len(comprehensive_data['streets'])} street segments")
-                
-            except Exception as e:
-                logger.warning(f"Failed to load streets: {e}")
-            
-            # 4. Get land use and natural features
-            logger.info("Loading land use and natural features...")
-            try:
-                landuse = ox.geometries_from_bbox(
-                    north=max_lat, south=min_lat, 
-                    east=max_lon, west=min_lon,
-                    tags={'landuse': True}
-                )
-                
-                if not landuse.empty:
-                    for idx, feature in landuse.iterrows():
-                        if feature.geometry and boundary_polygon.intersects(feature.geometry):
-                            landuse_data = {
-                                'osm_id': idx,
-                                'landuse_type': feature.get('landuse', 'unknown'),
-                                'geometry': feature.geometry,
-                                'name': feature.get('name', None)
-                            }
-                            comprehensive_data['landuse'].append(landuse_data)
-                
-                # Natural features
-                natural = ox.geometries_from_bbox(
-                    north=max_lat, south=min_lat, 
-                    east=max_lon, west=min_lon,
-                    tags={'natural': True}
-                )
-                
-                if not natural.empty:
-                    for idx, feature in natural.iterrows():
-                        if feature.geometry and boundary_polygon.intersects(feature.geometry):
-                            natural_data = {
-                                'osm_id': idx,
-                                'natural_type': feature.get('natural', 'unknown'),
-                                'geometry': feature.geometry,
-                                'name': feature.get('name', None)
-                            }
-                            comprehensive_data['natural_features'].append(natural_data)
-                
-                logger.info(f"Loaded {len(comprehensive_data['landuse'])} land use areas and {len(comprehensive_data['natural_features'])} natural features")
-                
-            except Exception as e:
-                logger.warning(f"Failed to load land use/natural features: {e}")
-            
-            # 5. Calculate summary statistics
-            total_buildings = len(comprehensive_data['buildings'])
-            total_amenities = sum(len(amenities) for amenities in comprehensive_data['amenities'].values())
-            total_streets = len(comprehensive_data['streets'])
-            
-            comprehensive_data['summary'] = {
-                'total_buildings': total_buildings,
-                'total_amenities': total_amenities,
-                'total_streets': total_streets,
-                'boundary_area_sq_miles': boundary_polygon.area * 0.000000386102,
-                'building_density': total_buildings / (boundary_polygon.area * 0.000000386102) if boundary_polygon.area > 0 else 0,
-                'amenity_density': total_amenities / (boundary_polygon.area * 0.000000386102) if boundary_polygon.area > 0 else 0
-            }
-            
-            logger.info(f"Comprehensive OSM data loaded successfully for {neighborhood_name}")
-            logger.info(f"Summary: {total_buildings} buildings, {total_amenities} amenities, {total_streets} streets")
-            
-            return comprehensive_data
-            
-        except Exception as e:
-            logger.error(f"Error loading comprehensive OSM data: {e}")
-            return {}
-    
     def get_comprehensive_neighborhood_data(self, 
                                           center_lat: float, 
                                           center_lon: float, 
@@ -915,79 +615,29 @@ class EnhancedRealEstateDataFetcher:
         except Exception as e:
             logger.error(f"Error getting comprehensive neighborhood data: {e}")
             return {}
+
+# Example usage and testing
+if __name__ == "__main__":
+    # Test the enhanced data fetcher
+    fetcher = EnhancedRealEstateDataFetcher()
     
-    def get_neighborhood_with_comprehensive_data(self, 
-                                               neighborhood_name: str, 
-                                               city: str, 
-                                               state: str) -> Dict[str, Any]:
-        """
-        Get neighborhood boundary and comprehensive OSM data
-        This is the main method to use for Zillow-like neighborhood analysis
-        """
-        logger.info(f"Getting comprehensive data for {neighborhood_name}, {city}, {state}")
-        
-        try:
-            # Step 1: Get the neighborhood boundary
-            boundary = self.get_neighborhood_boundary(neighborhood_name, city, state)
-            
-            if not boundary:
-                logger.warning(f"No boundary found for {neighborhood_name}, using fallback")
-                return {}
-            
-            # Step 2: Load comprehensive OSM data within the boundary
-            comprehensive_data = self.get_comprehensive_osm_data_within_boundary(
-                boundary, neighborhood_name
-            )
-            
-            # Step 3: Add boundary information
-            comprehensive_data['neighborhood_info'] = {
-                'name': neighborhood_name,
-                'city': city,
-                'state': state,
-                'boundary_polygon': boundary,
-                'boundary_area_sq_miles': boundary.area * 0.000000386102
-            }
-            
-            logger.info(f"Successfully loaded comprehensive data for {neighborhood_name}")
-            return comprehensive_data
-            
-        except Exception as e:
-            logger.error(f"Error getting neighborhood with comprehensive data: {e}")
-            return {}
+    # Test coordinates (San Francisco)
+    test_lat, test_lon = 37.7749, -122.4194
     
-    # Example usage and testing
-    if __name__ == "__main__":
-        # Test the enhanced data fetcher
-        fetcher = EnhancedRealEstateDataFetcher()
-        
-        # Test coordinates (San Francisco)
-        test_lat, test_lon = 37.7749, -122.4194
-        
-        print("Testing Enhanced Real Estate Data Fetcher...")
-        
-        # Test amenities
-        amenities = fetcher.get_neighborhood_amenities(test_lat, test_lon, 0.5)
-        print(f"Found {sum(len(amenities.get(cat, [])) for cat in amenities.keys())} amenities")
-        
-        # Test walkability
-        walkability = fetcher.calculate_walkability_score(test_lat, test_lon)
-        print(f"Walkability score: {walkability.get('overall_walkability', 0):.1f}/100")
-        
-        # Test transit
-        transit = fetcher.calculate_transit_score(test_lat, test_lon)
-        print(f"Transit score: {transit:.1f}/100")
-        
-        # Test comprehensive data
-        comprehensive = fetcher.get_comprehensive_neighborhood_data(test_lat, test_lon, 'CA', 'San Francisco')
-        print(f"Comprehensive data summary: {comprehensive.get('summary', {})}")
-        
-        # Test new neighborhood boundary functionality
-        print("\nTesting Neighborhood Boundary Functionality...")
-        neighborhood_data = fetcher.get_neighborhood_with_comprehensive_data("North Beach", "San Francisco", "CA")
-        if neighborhood_data:
-            print(f"✅ Successfully loaded data for North Beach neighborhood")
-            print(f"   Buildings: {neighborhood_data.get('summary', {}).get('total_buildings', 0)}")
-            print(f"   Amenities: {neighborhood_data.get('summary', {}).get('total_amenities', 0)}")
-            print(f"   Streets: {neighborhood_data.get('summary', {}).get('total_streets', 0)}")
-        else:
-            print("❌ Failed to load neighborhood data")
+    print("Testing Enhanced Real Estate Data Fetcher...")
+    
+    # Test amenities
+    amenities = fetcher.get_neighborhood_amenities(test_lat, test_lon, 0.5)
+    print(f"Found {sum(len(amenities.get(cat, [])) for cat in amenities.keys())} amenities")
+    
+    # Test walkability
+    walkability = fetcher.calculate_walkability_score(test_lat, test_lon)
+    print(f"Walkability score: {walkability.get('overall_walkability', 0):.1f}/100")
+    
+    # Test transit
+    transit = fetcher.calculate_transit_score(test_lat, test_lon)
+    print(f"Transit score: {transit:.1f}/100")
+    
+    # Test comprehensive data
+    comprehensive = fetcher.get_comprehensive_neighborhood_data(test_lat, test_lon, 'CA', 'San Francisco')
+    print(f"Comprehensive data summary: {comprehensive.get('summary', {})}")
