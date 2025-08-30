@@ -450,7 +450,7 @@ def load_area_data_optimized(state, county, network_available=True):
     return filtered_df
 
 # Robust fallback map with OpenStreetMap background
-def create_robust_fallback_map(data, properties_df=None):
+def create_robust_fallback_map(data, properties=None, city_boundary=None):
     """Create a robust fallback map that works reliably"""
     if len(data) == 0:
         return None
@@ -526,29 +526,69 @@ def create_robust_fallback_map(data, properties_df=None):
     ]
     
     # Add properties layer if available
-    if properties_df is not None and not properties_df.empty:
-        valid_properties = properties_df[properties_df['latitude'].notna() & properties_df['longitude'].notna()].copy()
+    if properties is not None and len(properties) > 0:
+        # Convert PropertyBoundary objects to DataFrame format for Pydeck
+        properties_data = []
+        for prop in properties:
+            if hasattr(prop.geometry, 'centroid'):
+                properties_data.append({
+                    'latitude': prop.geometry.centroid.y,
+                    'longitude': prop.geometry.centroid.x,
+                    'building_type': prop.building_type,
+                    'address': prop.address,
+                    'area_sqft': prop.area_sqft
+                })
         
-        if len(valid_properties) > 0:
-            logger.info(f"Fallback map: Adding {len(valid_properties)} properties")
+        if properties_data:
+            properties_df = pd.DataFrame(properties_data)
+            valid_properties = properties_df[properties_df['latitude'].notna() & properties_df['longitude'].notna()].copy()
             
-            # Create properties layer
-            properties_layer = pdk.Layer(
-                'ScatterplotLayer',
-                valid_properties,
-                get_position=['longitude', 'latitude'],
-                get_radius=10,
-                get_fill_color=[0, 100, 200, 180],
-                get_line_color=[255, 255, 255, 150],
-                pickable=True,
-                opacity=0.7,
+            if len(valid_properties) > 0:
+                logger.info(f"Fallback map: Adding {len(valid_properties)} properties")
+                
+                # Create properties layer
+                properties_layer = pdk.Layer(
+                    'ScatterplotLayer',
+                    valid_properties,
+                    get_position=['longitude', 'latitude'],
+                    get_radius=10,
+                    get_fill_color=[0, 100, 200, 180],
+                    get_line_color=[255, 255, 255, 150],
+                    pickable=True,
+                    opacity=0.7,
+                    stroked=True,
+                    filled=True,
+                    line_width_min_pixels=1,
+                    radius_scale=1
+                )
+                
+                layers.append(properties_layer)
+    
+    # Add city boundary layer if available
+    if city_boundary is not None and hasattr(city_boundary, 'exterior'):
+        try:
+            # Convert city boundary to GeoJSON format for Pydeck
+            boundary_coords = list(city_boundary.exterior.coords)
+            boundary_data = [{
+                'coordinates': [[lon, lat] for lon, lat in boundary_coords]
+            }]
+            
+            city_boundary_layer = pdk.Layer(
+                'PolygonLayer',
+                boundary_data,
+                get_polygon='coordinates',
                 stroked=True,
-                filled=True,
-                line_width_min_pixels=1,
-                radius_scale=1
+                filled=False,
+                line_width_min_pixels=3,
+                get_line_color=[255, 0, 0, 200],  # Red color for city boundary
+                get_fill_color=[255, 0, 0, 50]    # Semi-transparent red fill
             )
             
-            layers.append(properties_layer)
+            layers.append(city_boundary_layer)
+            logger.info("Fallback map: Added city boundary layer")
+            
+        except Exception as e:
+            logger.warning(f"Failed to add city boundary layer to fallback map: {e}")
     
     # Use a reliable map style
     deck = pdk.Deck(
@@ -873,7 +913,7 @@ def create_3d_roi_map_optimized(data, use_satellite=False, properties_df=None):
         return deck
 
 # Dynamic property loading based on map view and zoom level
-def create_dynamic_property_map(data, use_satellite=False, selected_neighborhood=None, zoom_level=10):
+def create_dynamic_property_map(data, use_satellite=False, selected_neighborhood=None, zoom_level=10, properties=None, city_boundary=None):
     """Create a dynamic map that loads properties based on zoom level and neighborhood selection"""
     if len(data) == 0:
         return None
@@ -1019,58 +1059,102 @@ def create_dynamic_property_map(data, use_satellite=False, selected_neighborhood
     ]
     
     # Add properties layer only if zoomed in enough and properties available
-    if properties_df is not None and not properties_df.empty and zoom >= 12:
+    if properties is not None and len(properties) > 0 and zoom >= 12:
         valid_properties = properties_df[
             (properties_df['latitude'].notna()) & 
             (properties_df['longitude'].notna())
         ].copy()
         
-        if len(valid_properties) > 0:
-            logger.info(f"Adding {len(valid_properties)} properties to map (zoom level: {zoom})")
+        if len(properties) > 0:
+            logger.info(f"Adding {len(properties)} properties to map (zoom level: {zoom})")
             
-            # Prepare properties data with enhanced tooltips
-            properties_with_tooltips = valid_properties.copy()
-            properties_with_tooltips['tooltip_text'] = properties_with_tooltips.apply(
-                lambda row: f"<b>🏠 Property</b><br/>"
-                           f"Type: {row.get('building_type', 'N/A')}<br/>"
-                           f"Address: {row.get('address', {}).get('street', 'N/A')} {row.get('address', {}).get('housenumber', '')}<br/>"
-                           f"Estimated Value: ${row.get('estimated_value', 0):,.0f}<br/>"
-                           f"<i>Click for detailed information</i>",
-                axis=1
-            )
+            # Convert PropertyBoundary objects to DataFrame format for Pydeck
+            properties_data = []
+            for prop in properties:
+                if hasattr(prop.geometry, 'centroid'):
+                    properties_data.append({
+                        'latitude': prop.geometry.centroid.y,
+                        'longitude': prop.geometry.centroid.x,
+                        'building_type': prop.building_type,
+                        'address': prop.address,
+                        'area_sqft': prop.area_sqft,
+                        'year_built': prop.year_built,
+                        'stories': prop.stories
+                    })
             
-            # Create properties layer with click interaction
-            properties_layer = pdk.Layer(
-                'ScatterplotLayer',
-                properties_with_tooltips,
-                get_position=['longitude', 'latitude'],
-                get_radius=12,  # Slightly larger radius for better visibility
-                get_fill_color=[0, 100, 200, 200],  # More opaque blue for properties
-                get_line_color=[255, 255, 255, 200],
-                pickable=True,
-                opacity=0.8,
-                stroked=True,
-                filled=True,
-                line_width_min_pixels=2,
-                radius_scale=1
-            )
-            
-            # Add properties layer on top
-            layers.append(properties_layer)
-            logger.info(f"Properties layer added with {len(valid_properties)} properties")
-            
-            # Update neighborhood tooltips to mention properties
-            scatter_data['tooltip_text'] = scatter_data.apply(
-                lambda row: f"<b>Neighborhood: {row['RegionName']}</b><br/>"
-                           f"ROI: {row['ROI']:.1f}%<br/>"
-                           f"Value: ${row['Current_Value']:,.0f}<br/>"
-                           f"<i>Zoom in to level 12+ to see individual properties</i>",
-                axis=1
+            if properties_data:
+                properties_df = pd.DataFrame(properties_data)
+                
+                # Prepare properties data with enhanced tooltips
+                properties_with_tooltips = properties_df.copy()
+                properties_with_tooltips['tooltip_text'] = properties_with_tooltips.apply(
+                    lambda row: f"<b>🏠 Property</b><br/>"
+                               f"Type: {row.get('building_type', 'N/A')}<br/>"
+                               f"Address: {row.get('address', 'N/A')}<br/>"
+                               f"Area: {row.get('area_sqft', 0):.0f} sq ft<br/>"
+                               f"Year Built: {row.get('year_built', 'N/A')}<br/>"
+                               f"<i>Click for detailed information</i>",
+                    axis=1
+                )
+                
+                # Create properties layer with click interaction
+                properties_layer = pdk.Layer(
+                    'ScatterplotLayer',
+                    properties_with_tooltips,
+                    get_position=['longitude', 'latitude'],
+                    get_radius=12,  # Slightly larger radius for better visibility
+                    get_fill_color=[0, 100, 200, 200],  # More opaque blue for properties
+                    get_line_color=[255, 255, 255, 200],
+                    pickable=True,
+                    opacity=0.8,
+                    stroked=True,
+                    filled=True,
+                    line_width_min_pixels=2,
+                    radius_scale=1
+                )
+                
+                # Add properties layer on top
+                layers.append(properties_layer)
+                logger.info(f"Properties layer added with {len(properties_data)} properties")
+                
+                # Update neighborhood tooltips to mention properties
+                scatter_data['tooltip_text'] = scatter_data.apply(
+                    lambda row: f"<b>Neighborhood: {row['RegionName']}</b><br/>"
+                               f"ROI: {row['ROI']:.1f}%<br/>"
+                               f"Value: ${row['Current_Value']:,.0f}<br/>"
+                               f"<i>Zoom in to level 12+ to see individual properties</i>",
+                    axis=1
             )
         else:
             logger.warning("No valid properties with coordinates found")
     else:
         logger.info(f"Properties not shown at zoom level {zoom} (requires zoom >= 12)")
+
+    # Add city boundary layer if available
+    if city_boundary is not None and hasattr(city_boundary, 'exterior'):
+        try:
+            # Convert city boundary to GeoJSON format for Pydeck
+            boundary_coords = list(city_boundary.exterior.coords)
+            boundary_data = [{
+                'coordinates': [[lon, lat] for lon, lat in boundary_coords]
+            }]
+            
+            city_boundary_layer = pdk.Layer(
+                'PolygonLayer',
+                boundary_data,
+                get_polygon='coordinates',
+                stroked=True,
+                filled=False,
+                line_width_min_pixels=3,
+                get_line_color=[255, 0, 0, 200],  # Red color for city boundary
+                get_fill_color=[255, 0, 0, 50]    # Semi-transparent red fill
+            )
+            
+            layers.append(city_boundary_layer)
+            logger.info("Added city boundary layer to map")
+            
+        except Exception as e:
+            logger.warning(f"Failed to add city boundary layer: {e}")
 
     # FORCE OpenStreetMap tiles - this should work on Streamlit Cloud
     try:
@@ -1405,36 +1489,45 @@ def main():
         use_satellite = st.sidebar.checkbox("Satellite View", value=False, 
                                           help="Use satellite imagery as base map (requires network)")
         
-            # Enhanced Data Sources Options
-    st.sidebar.markdown('<div class="sidebar-section"><h3>🔍 Enhanced Data Sources</h3></div>', unsafe_allow_html=True)
-    
-    # Enable enhanced data sources
-    enable_enhanced_data = st.sidebar.checkbox("Enable Enhanced Data Sources", value=True,
-                                             help="Use OSMnx, Census, and other free data sources")
-    
-    if enable_enhanced_data:
-        st.sidebar.markdown("**Data Source Settings**")
+                    # Enhanced Data Sources Options
+        st.sidebar.markdown('<div class="sidebar-section"><h3>🔍 Enhanced Data Sources</h3></div>', unsafe_allow_html=True)
         
-        # OSMnx and OpenStreetMap settings
-        st.sidebar.markdown("**🗺️ OpenStreetMap Data**")
-        enable_amenities = st.sidebar.checkbox("Neighborhood Amenities", value=True,
-                                             help="Load schools, restaurants, shopping, etc.")
-        enable_property_boundaries = st.sidebar.checkbox("Property Boundaries", value=True,
-                                                       help="Load building footprints and property data")
-        enable_street_network = st.sidebar.checkbox("Street Network", value=False,
-                                                  help="Load street network for accessibility analysis")
+        # Enable enhanced data sources
+        enable_enhanced_data = st.sidebar.checkbox("Enable Enhanced Data Sources", value=True,
+                                                 help="Use OSMnx, Census, and other free data sources")
         
-        # Census data settings
-        st.sidebar.markdown("**📊 Census/ACS Data**")
-        enable_census_data = st.sidebar.checkbox("Demographics & Housing", value=True,
-                                               help="Load population, income, education data")
-        
-        # Scoring systems
-        st.sidebar.markdown("**📈 Scoring Systems**")
-        enable_walkability = st.sidebar.checkbox("Walkability Score", value=True,
-                                              help="Calculate walkability based on nearby amenities")
-        enable_transit_score = st.sidebar.checkbox("Transit Score", value=True,
-                                                 help="Calculate transit accessibility score")
+        if enable_enhanced_data:
+            st.sidebar.markdown("**Data Source Settings**")
+            
+            # City-specific data loading
+            st.sidebar.markdown("**🏙️ City-Specific Data**")
+            enable_city_boundaries = st.sidebar.checkbox("City Boundaries", value=True,
+                                                       help="Load city administrative boundaries")
+            enable_city_houses = st.sidebar.checkbox("City-Wide Houses", value=True,
+                                                   help="Load ALL houses within city limits (not just small radius)")
+            enable_city_amenities = st.sidebar.checkbox("City-Wide Amenities", value=True,
+                                                      help="Load amenities across entire city (not just radius)")
+            
+            # OSMnx and OpenStreetMap settings
+            st.sidebar.markdown("**🗺️ OpenStreetMap Data**")
+            enable_amenities = st.sidebar.checkbox("Neighborhood Amenities", value=True,
+                                                 help="Load schools, restaurants, shopping, etc.")
+            enable_property_boundaries = st.sidebar.checkbox("Property Boundaries", value=True,
+                                                           help="Load building footprints and property data")
+            enable_street_network = st.sidebar.checkbox("Street Network", value=False,
+                                                      help="Load street network for accessibility analysis")
+            
+            # Census data settings
+            st.sidebar.markdown("**📊 Census/ACS Data**")
+            enable_census_data = st.sidebar.checkbox("Demographics & Housing", value=True,
+                                                   help="Load population, income, education data")
+            
+            # Scoring systems
+            st.sidebar.markdown("**📈 Scoring Systems**")
+            enable_walkability = st.sidebar.checkbox("Walkability Score", value=True,
+                                                  help="Calculate walkability based on nearby amenities")
+            enable_transit_score = st.sidebar.checkbox("Transit Score", value=True,
+                                                     help="Calculate transit accessibility score")
     
     # Property data options
     st.sidebar.markdown('<div class="sidebar-section"><h3>🏠 Property Intelligence</h3></div>', unsafe_allow_html=True)
@@ -1528,35 +1621,56 @@ def main():
                                 center_lon = data['Longitude'].mean()
                                 
                                 # Load enhanced data based on user selections
-                                if enable_amenities:
-                                    enhanced_data['amenities'] = enhanced_fetcher.get_neighborhood_amenities(
-                                        center_lat, center_lon, radius_miles=1.0
-                                    )
-                                
-                                if enable_walkability:
-                                    enhanced_data['walkability'] = enhanced_fetcher.calculate_walkability_score(
-                                        center_lat, center_lon, radius_miles=0.5
-                                    )
-                                
-                                if enable_transit_score:
-                                    enhanced_data['transit_score'] = enhanced_fetcher.calculate_transit_score(
-                                        center_lat, center_lon, radius_miles=1.0
-                                    )
-                                
-                                if enable_census_data:
-                                    enhanced_data['census_data'] = enhanced_fetcher.get_census_data(
-                                        selected_state, selected_county
-                                    )
-                                
-                                if enable_property_boundaries:
-                                    enhanced_data['property_boundaries'] = enhanced_fetcher.get_property_boundaries(
-                                        center_lat, center_lon, radius_miles=0.5
-                                    )
-                                
-                                if enable_street_network:
-                                    enhanced_data['street_network'] = enhanced_fetcher.get_street_network(
-                                        center_lat, center_lon, radius_miles=1.0
-                                    )
+                                                          # Get city name from the selected neighborhood or county
+                          city_name = selected_neighborhood if selected_neighborhood else selected_county
+                          
+                          if enable_city_boundaries:
+                              enhanced_data['city_boundary'] = enhanced_fetcher.get_city_boundary(
+                                  city_name, selected_state
+                              )
+                          
+                          if enable_city_houses:
+                              enhanced_data['city_houses'] = enhanced_fetcher.get_houses_within_city(
+                                  city_name, selected_state, max_houses=5000
+                              )
+                          
+                          if enable_amenities:
+                              if enable_city_amenities and enable_city_boundaries:
+                                  # Use city-wide amenities if both are enabled
+                                  enhanced_data['amenities'] = enhanced_fetcher.get_city_amenities(
+                                      city_name, selected_state
+                                  )
+                              else:
+                                  # Fallback to radius-based amenities
+                                  enhanced_data['amenities'] = enhanced_fetcher.get_neighborhood_amenities(
+                                      center_lat, center_lon, radius_miles=1.0
+                                  )
+                          
+                          if enable_walkability:
+                              enhanced_data['walkability'] = enhanced_fetcher.calculate_walkability_score(
+                                  center_lat, center_lon, radius_miles=0.5
+                              )
+                          
+                          if enable_transit_score:
+                              enhanced_data['transit_score'] = enhanced_fetcher.calculate_transit_score(
+                                  center_lat, center_lon, radius_miles=1.0
+                              )
+                          
+                          if enable_census_data:
+                              enhanced_data['census_data'] = enhanced_fetcher.get_census_data(
+                                  selected_state, selected_county
+                              )
+                          
+                          if enable_property_boundaries and not enable_city_houses:
+                              # Only use radius-based property boundaries if city houses are not enabled
+                              enhanced_data['property_boundaries'] = enhanced_fetcher.get_property_boundaries(
+                                  center_lat, center_lon, radius_miles=0.5
+                              )
+                          
+                          if enable_street_network:
+                              enhanced_data['street_network'] = enhanced_fetcher.get_street_network(
+                                  center_lat, center_lon, radius_miles=1.0
+                              )
                                 
                                 st.success("✅ Enhanced data loaded successfully!")
                                 
@@ -1599,12 +1713,18 @@ def main():
                                 st.markdown(f'<div class="metric-container"><strong>🚌 Transit Score</strong><br><span style="font-size: 1.5rem; color: #3b82f6;">{transit_score:.1f}/100</span></div>', unsafe_allow_html=True)
                         
                         with col3:
-                            if 'amenities' in enhanced_data:
+                            if 'city_houses' in enhanced_data and enhanced_data['city_houses']:
+                                total_properties = len(enhanced_data['city_houses'])
+                                st.markdown(f'<div class="metric-container"><strong>🏠 City Properties</strong><br><span style="font-size: 1.5rem; color: #f59e0b;">{total_properties}</span></div>', unsafe_allow_html=True)
+                            elif 'amenities' in enhanced_data:
                                 total_amenities = sum(len(enhanced_data['amenities'].get(cat, [])) for cat in enhanced_data['amenities'].keys())
                                 st.markdown(f'<div class="metric-container"><strong>🏪 Total Amenities</strong><br><span style="font-size: 1.5rem; color: #f59e0b;">{total_amenities}</span></div>', unsafe_allow_html=True)
                         
                         with col4:
-                            if 'property_boundaries' in enhanced_data:
+                            if 'city_boundary' in enhanced_data and enhanced_data['city_boundary']:
+                                city_area_sqmi = enhanced_data['city_boundary'].area * 0.386102
+                                st.markdown(f'<div class="metric-container"><strong>🏙️ City Area</strong><br><span style="font-size: 1.5rem; color: #8b5cf6;">{city_area_sqmi:.1f} sq mi</span></div>', unsafe_allow_html=True)
+                            elif 'property_boundaries' in enhanced_data:
                                 property_count = len(enhanced_data['property_boundaries'])
                                 st.markdown(f'<div class="metric-container"><strong>🏠 Properties</strong><br><span style="font-size: 1.5rem; color: #8b5cf6;">{property_count}</span></div>', unsafe_allow_html=True)
                     
@@ -1640,12 +1760,23 @@ def main():
                             """, unsafe_allow_html=True)
                         
                         # Create the dynamic property map with selected neighborhood
-                        map_chart = create_dynamic_property_map(data, use_satellite and network_available, st.session_state.selected_neighborhood, zoom_threshold)
+                        # Use city houses if available, otherwise use regular property boundaries
+                        properties_for_map = None
+                        city_boundary_for_map = None
+                        if enhanced_data and 'city_houses' in enhanced_data and enhanced_data['city_houses']:
+                            properties_for_map = enhanced_data['city_houses']
+                        elif enhanced_data and 'property_boundaries' in enhanced_data:
+                            properties_for_map = enhanced_data['property_boundaries']
+                        
+                        if enhanced_data and 'city_boundary' in enhanced_data and enhanced_data['city_boundary']:
+                            city_boundary_for_map = enhanced_data['city_boundary']
+                        
+                        map_chart = create_dynamic_property_map(data, use_satellite and network_available, st.session_state.selected_neighborhood, zoom_threshold, properties_for_map, city_boundary_for_map)
                         
                         # If enhanced map fails, try fallback map
                         if not map_chart:
                             st.warning("⚠️ Enhanced map failed, trying fallback map...")
-                            map_chart = create_robust_fallback_map(data, None)
+                            map_chart = create_robust_fallback_map(data, properties_for_map, city_boundary_for_map)
                         
                         if map_chart:
                             st.pydeck_chart(map_chart, use_container_width=True)
@@ -1753,8 +1884,8 @@ def main():
                     if enhanced_data:
                         st.markdown('<h3 class="section-header">🔍 Enhanced Data Details</h3>', unsafe_allow_html=True)
                         
-                        # Create tabs for different data types
-                        tab1, tab2, tab3, tab4 = st.tabs(["🏪 Amenities", "📊 Census Data", "🏠 Property Details", "🗺️ Interactive Map"])
+                                      # Create tabs for different data types
+              tab1, tab2, tab3, tab4, tab5 = st.tabs(["🏪 Amenities", "📊 Census Data", "🏠 Property Details", "🏙️ City Boundaries", "🗺️ Interactive Map"])
                         
                         with tab1:
                             if 'amenities' in enhanced_data:
@@ -1834,6 +1965,61 @@ def main():
                                     st.dataframe(building_df, use_container_width=True, hide_index=True)
                         
                         with tab4:
+                            if enhanced_data:
+                                st.markdown("### City Boundaries & Administrative Data")
+                                
+                                # Show city boundary information
+                                if 'city_boundary' in enhanced_data and enhanced_data['city_boundary']:
+                                    st.success("✅ City boundary loaded successfully!")
+                                    
+                                    # Calculate city area
+                                    city_area_sqkm = enhanced_data['city_boundary'].area
+                                    city_area_sqmi = city_area_sqkm * 0.386102
+                                    
+                                    col1, col2, col3 = st.columns(3)
+                                    with col1:
+                                        st.metric("City Area", f"{city_area_sqmi:.1f} sq mi")
+                                    with col2:
+                                        st.metric("City Area", f"{city_area_sqkm:.1f} sq km")
+                                    with col3:
+                                        st.metric("Boundary Type", "Administrative")
+                                    
+                                    # Show city center coordinates
+                                    city_center = enhanced_data['city_boundary'].centroid
+                                    st.info(f"**City Center:** {city_center.y:.4f}, {city_center.x:.4f}")
+                                    
+                                else:
+                                    st.warning("⚠️ City boundary not available")
+                                
+                                # Show city houses summary
+                                if 'city_houses' in enhanced_data and enhanced_data['city_houses']:
+                                    houses = enhanced_data['city_houses']
+                                    st.markdown("### City-Wide Property Data")
+                                    
+                                    col1, col2, col3 = st.columns(3)
+                                    with col1:
+                                        st.metric("Total Properties", len(houses))
+                                    with col2:
+                                        avg_area = sum(h.area_sqft for h in houses) / len(houses) if houses else 0
+                                        st.metric("Avg Property Size", f"{avg_area:.0f} sq ft")
+                                    with col3:
+                                        residential_count = sum(1 for h in houses if h.building_type in ['house', 'residential'])
+                                        st.metric("Residential", residential_count)
+                                    
+                                    # Property type breakdown
+                                    building_types = {}
+                                    for house in houses:
+                                        building_types[house.building_type] = building_types.get(house.building_type, 0) + 1
+                                    
+                                    if building_types:
+                                        st.markdown("**Property Type Breakdown:**")
+                                        for btype, count in building_types.items():
+                                            st.write(f"• {btype.title()}: {count} properties")
+                                
+                                else:
+                                    st.info("ℹ️ Enable 'City-Wide Houses' to see comprehensive property data")
+                        
+                        with tab5:
                             if enhanced_data:
                                 st.markdown("### Interactive Neighborhood Map")
                                 

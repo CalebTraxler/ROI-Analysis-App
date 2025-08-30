@@ -471,6 +471,353 @@ class EnhancedRealEstateDataFetcher:
             logger.error(f"Error calculating transit score: {e}")
             return 0
     
+    def get_city_boundary(self, city_name: str, state: str, country: str = "USA") -> Optional[Polygon]:
+        """
+        Get the administrative boundary of a city from OpenStreetMap
+        Returns the city boundary as a Polygon geometry
+        """
+        logger.info(f"Fetching city boundary for {city_name}, {state}")
+        
+        try:
+            # Search for the city boundary using OSMnx
+            city_query = f"{city_name}, {state}, {country}"
+            
+            # Get the city boundary using administrative boundaries
+            city_boundary = ox.geometries_from_place(
+                city_query,
+                tags={'admin_level': '8', 'boundary': 'administrative'}  # City level
+            )
+            
+            if city_boundary.empty:
+                # Try alternative boundary types
+                city_boundary = ox.geometries_from_place(
+                    city_query,
+                    tags={'admin_level': '10', 'boundary': 'administrative'}  # Suburb level
+                )
+            
+            if city_boundary.empty:
+                # Try getting the city as a place
+                city_boundary = ox.geometries_from_place(
+                    city_query,
+                    tags={'place': 'city'}
+                )
+            
+            if not city_boundary.empty:
+                # Get the largest boundary (usually the main city)
+                largest_area = 0
+                city_polygon = None
+                
+                for idx, boundary in city_boundary.iterrows():
+                    if hasattr(boundary.geometry, 'area'):
+                        area = boundary.geometry.area
+                        if area > largest_area:
+                            largest_area = area
+                            city_polygon = boundary.geometry
+                
+                if city_polygon:
+                    logger.info(f"Found city boundary for {city_name} with area: {largest_area:.2f} sq km")
+                    return city_polygon
+            
+            logger.warning(f"No city boundary found for {city_name}, {state}")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error fetching city boundary for {city_name}: {e}")
+            return None
+    
+    def get_houses_within_city(self, city_name: str, state: str, max_houses: int = 10000) -> List[PropertyBoundary]:
+        """
+        Get ALL houses within a city's administrative boundaries
+        Much more comprehensive than radius-based search
+        """
+        logger.info(f"Loading houses within {city_name}, {state} city limits")
+        
+        try:
+            # Get the city boundary first
+            city_boundary = self.get_city_boundary(city_name, state)
+            
+            if not city_boundary:
+                logger.warning(f"City boundary not found for {city_name}, falling back to radius search")
+                # Fallback to radius search around city center
+                city_center = ox.geocoder.geocode(f"{city_name}, {state}, USA")
+                if city_center:
+                    return self.get_property_boundaries(
+                        city_center[0], city_center[1], 
+                        radius_miles=5.0  # Larger radius as fallback
+                    )
+                return []
+            
+            # Get all buildings within the city boundary
+            buildings = ox.geometries_from_polygon(
+                city_boundary,
+                tags={'building': True}
+            )
+            
+            if buildings.empty:
+                logger.warning(f"No buildings found within {city_name} city limits")
+                return []
+            
+            logger.info(f"Found {len(buildings)} buildings in {city_name}")
+            
+            # Filter to just residential buildings and process
+            residential_buildings = buildings[
+                buildings['building'].isin(['house', 'residential', 'apartments', 'detached', 'semi'])
+            ]
+            
+            if residential_buildings.empty:
+                logger.info(f"No residential buildings found, using all buildings")
+                residential_buildings = buildings
+            
+            # Limit the number of buildings for performance
+            if len(residential_buildings) > max_houses:
+                residential_buildings = residential_buildings.sample(n=max_houses, random_state=42)
+                logger.info(f"Limited to {max_houses} buildings for performance")
+            
+            property_boundaries = []
+            
+            for idx, building in residential_buildings.iterrows():
+                try:
+                    # Extract building information
+                    building_type = building.get('building', 'unknown')
+                    address = building.get('addr:housenumber', '') + ' ' + building.get('addr:street', '')
+                    year_built = building.get('start_date', None)
+                    if year_built:
+                        try:
+                            year_built = int(str(year_built)[:4])
+                        except:
+                            year_built = None
+                    
+                    stories = building.get('building:levels', None)
+                    if stories:
+                        try:
+                            stories = int(stories)
+                        except:
+                            stories = None
+                    
+                    # Calculate area
+                    if hasattr(building.geometry, 'area'):
+                        area_sqft = building.geometry.area * 10.764  # Convert sq meters to sq feet
+                    else:
+                        area_sqft = 0
+                    
+                    # Only include buildings with valid addresses
+                    if address.strip() and building.get('addr:street'):
+                        property_boundary = PropertyBoundary(
+                            property_id=str(idx),
+                            geometry=building.geometry,
+                            area_sqft=area_sqft,
+                            address=address.strip(),
+                            building_type=building_type,
+                            year_built=year_built,
+                            stories=stories
+                        )
+                        property_boundaries.append(property_boundary)
+                    
+                except Exception as e:
+                    logger.warning(f"Error processing building {idx}: {e}")
+                    continue
+            
+            logger.info(f"Successfully processed {len(property_boundaries)} properties in {city_name}")
+            return property_boundaries
+            
+        except Exception as e:
+            logger.error(f"Error loading houses within city {city_name}: {e}")
+            return []
+    
+    def get_city_amenities(self, city_name: str, state: str) -> Dict[str, List[AmenityData]]:
+        """
+        Get amenities within a city's boundaries (more comprehensive than radius search)
+        """
+        logger.info(f"Loading amenities within {city_name}, {state} city limits")
+        
+        try:
+            # Get the city boundary
+            city_boundary = self.get_city_boundary(city_name, state)
+            
+            if not city_boundary:
+                logger.warning(f"City boundary not found for {city_name}, using fallback")
+                # Fallback to center point search
+                city_center = ox.geocoder.geocode(f"{city_name}, {state}, USA")
+                if city_center:
+                    return self.get_neighborhood_amenities(
+                        city_center[0], city_center[1], radius_miles=5.0
+                    )
+                return {}
+            
+            # Define amenity types to search for
+            amenity_types = {
+                'education': ['school', 'university', 'college', 'kindergarten'],
+                'healthcare': ['hospital', 'clinic', 'pharmacy', 'doctor'],
+                'shopping': ['supermarket', 'mall', 'shop', 'convenience'],
+                'dining': ['restaurant', 'cafe', 'bar', 'fast_food'],
+                'recreation': ['park', 'playground', 'sports_centre', 'gym'],
+                'transport': ['bus_station', 'subway_station', 'train_station', 'parking'],
+                'services': ['bank', 'post_office', 'library', 'police']
+            }
+            
+            amenities_by_type = {}
+            
+            for category, types in amenity_types.items():
+                category_amenities = []
+                
+                for amenity_type in types:
+                    try:
+                        # Get amenities within the city boundary
+                        amenities = ox.geometries_from_polygon(
+                            city_boundary,
+                            tags={'amenity': amenity_type}
+                        )
+                        
+                        if not amenities.empty:
+                            for idx, amenity in amenities.iterrows():
+                                # Calculate distance from city center for scoring
+                                city_center = city_boundary.centroid
+                                amenity_point = Point(amenity.geometry.x, amenity.geometry.y)
+                                distance_miles = city_center.distance(amenity_point) * 69  # Rough conversion
+                                
+                                amenity_data = AmenityData(
+                                    name=amenity.get('name', f'{amenity_type.title()}'),
+                                    amenity_type=amenity_type,
+                                    latitude=amenity.geometry.y,
+                                    longitude=amenity.geometry.x,
+                                    distance_miles=distance_miles,
+                                    address=amenity.get('addr:street', None),
+                                    phone=amenity.get('phone', None),
+                                    website=amenity.get('website', None)
+                                )
+                                category_amenities.append(amenity_data)
+                        
+                        # Rate limiting
+                        time.sleep(0.1)
+                        
+                    except Exception as e:
+                        logger.warning(f"Failed to fetch {amenity_type} amenities: {e}")
+                        continue
+                
+                amenities_by_type[category] = category_amenities
+            
+            logger.info(f"Found {sum(len(amenities) for amenities in amenities_by_type.values())} total amenities in {city_name}")
+            return amenities_by_type
+            
+        except Exception as e:
+            logger.error(f"Error loading city amenities for {city_name}: {e}")
+            return {}
+    
+    def create_city_map_with_boundaries(self, 
+                                       city_name: str, 
+                                       state: str,
+                                       properties: List[PropertyBoundary] = None,
+                                       amenities: Dict[str, List[AmenityData]] = None) -> folium.Map:
+        """
+        Create an interactive map showing city boundaries, properties, and amenities
+        """
+        logger.info(f"Creating city map for {city_name}, {state}")
+        
+        try:
+            # Get city boundary
+            city_boundary = self.get_city_boundary(city_name, state)
+            
+            if not city_boundary:
+                logger.warning(f"City boundary not found for {city_name}")
+                return None
+            
+            # Calculate city center for map centering
+            city_center = city_boundary.centroid
+            center_lat, center_lon = city_center.y, city_center.x
+            
+            # Create base map
+            m = folium.Map(
+                location=[center_lat, center_lon],
+                zoom_start=12,
+                tiles='OpenStreetMap'
+            )
+            
+            # Add satellite layer
+            folium.TileLayer(
+                tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+                attr='Esri',
+                name='Satellite',
+                overlay=False
+            ).add_to(m)
+            
+            # Add city boundary
+            if hasattr(city_boundary, 'exterior'):
+                coords = list(city_boundary.exterior.coords)
+                folium.Polygon(
+                    locations=[[lat, lon] for lon, lat in coords],
+                    popup=f"<b>{city_name}, {state}</b><br>City Boundary",
+                    tooltip=f"{city_name} City Limits",
+                    color='red',
+                    weight=3,
+                    fill=True,
+                    fillColor='red',
+                    fillOpacity=0.1
+                ).add_to(m)
+            
+            # Add properties if provided
+            if properties:
+                for prop in properties:
+                    if hasattr(prop.geometry, 'exterior'):
+                        try:
+                            coords = list(prop.geometry.exterior.coords)
+                            folium.Polygon(
+                                locations=[[lat, lon] for lon, lat in coords],
+                                popup=f"""
+                                <b>Property Details</b><br>
+                                Type: {prop.building_type}<br>
+                                Area: {prop.area_sqft:.0f} sq ft<br>
+                                Address: {prop.address}<br>
+                                """,
+                                tooltip=f"{prop.address} ({prop.area_sqft:.0f} sq ft)",
+                                color='blue',
+                                weight=1,
+                                fill=True,
+                                fillColor='lightblue',
+                                fillOpacity=0.3
+                            ).add_to(m)
+                        except Exception as e:
+                            logger.warning(f"Error adding property to map: {e}")
+                            continue
+            
+            # Add amenities if provided
+            if amenities:
+                for category, category_amenities in amenities.items():
+                    if category_amenities:
+                        # Define colors for different amenity types
+                        colors = {
+                            'education': 'blue',
+                            'healthcare': 'red',
+                            'shopping': 'green',
+                            'dining': 'orange',
+                            'recreation': 'purple',
+                            'transport': 'darkblue',
+                            'services': 'darkgreen'
+                        }
+                        
+                        color = colors.get(category, 'gray')
+                        
+                        for amenity in category_amenities:
+                            folium.Marker(
+                                [amenity.latitude, amenity.longitude],
+                                popup=f"""
+                                <b>{amenity.name}</b><br>
+                                Type: {amenity.amenity_type}<br>
+                                Distance: {amenity.distance_miles:.2f} miles<br>
+                                """,
+                                tooltip=f"{amenity.name} ({amenity.distance_miles:.2f} mi)",
+                                icon=folium.Icon(color=color, icon='info-sign')
+                            ).add_to(m)
+            
+            # Add layer control
+            folium.LayerControl().add_to(m)
+            
+            logger.info(f"Successfully created city map for {city_name}")
+            return m
+            
+        except Exception as e:
+            logger.error(f"Error creating city map for {city_name}: {e}")
+            return None
+    
     def create_interactive_map(self, 
                              center_lat: float, 
                              center_lon: float, 
