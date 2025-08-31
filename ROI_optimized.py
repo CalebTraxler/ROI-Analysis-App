@@ -448,6 +448,42 @@ def load_area_data_optimized(state, county, network_available=True):
     logger.info(f"Processed {len(filtered_df)} rows for {county}, {state} with {filtered_df['Latitude'].notna().sum()} valid coordinates")
     return filtered_df
 
+def get_major_cities_in_county(county_name, state_name):
+    """
+    Get a list of major cities in a county
+    
+    Args:
+        county_name (str): Name of the county
+        state_name (str): Name of the state
+    
+    Returns:
+        list: List of city names
+    """
+    # Common major cities by county (you can expand this)
+    major_cities_map = {
+        "Los Angeles": ["Los Angeles", "Long Beach", "Glendale", "Pasadena", "Santa Monica"],
+        "Cook": ["Chicago", "Evanston", "Oak Park", "Skokie", "Arlington Heights"],
+        "Harris": ["Houston", "Pasadena", "Baytown", "Galena Park", "South Houston"],
+        "Maricopa": ["Phoenix", "Mesa", "Scottsdale", "Tempe", "Glendale"],
+        "King": ["Seattle", "Bellevue", "Kent", "Renton", "Federal Way"],
+        "Miami-Dade": ["Miami", "Hialeah", "Miami Beach", "Coral Gables", "Doral"],
+        "Broward": ["Fort Lauderdale", "Hollywood", "Pompano Beach", "Coral Springs", "Miramar"],
+        "Orange": ["Orlando", "Winter Park", "Maitland", "Ocoee", "Winter Garden"],
+        "Clark": ["Las Vegas", "Henderson", "North Las Vegas", "Boulder City"],
+        "Denver": ["Denver", "Aurora", "Lakewood", "Englewood", "Littleton"],
+        "Alameda": ["Oakland", "Fremont", "Hayward", "Berkeley", "San Leandro"],
+        "Contra Costa": ["Richmond", "Concord", "Antioch", "Pleasant Hill", "Walnut Creek"],
+        "Anchorage Borough": ["Anchorage", "Eagle River", "Chugiak", "Girdwood", "Palmer"]
+    }
+    
+    # Try to find cities for the specific county
+    county_key = f"{county_name} County" if not county_name.endswith(" County") else county_name
+    if county_key in major_cities_map:
+        return major_cities_map[county_key]
+    
+    # Fallback: return county name as a city if no specific cities found
+    return [county_name]
+
 # Robust fallback map with OpenStreetMap background
 def create_robust_fallback_map(data, properties_df=None):
     """Create a robust fallback map that works reliably"""
@@ -1326,14 +1362,6 @@ def main():
             state_county_map[state] = sorted(state_data['CountyName'].unique())
         return sorted(states), state_county_map
     
-    @st.cache_data(ttl=3600)
-    def get_cities_for_county(state, county):
-        """Get cities/neighborhoods available for a specific county"""
-        df = preprocess_main_dataset()
-        county_data = df[(df['State'] == state) & (df['CountyName'] == county)]
-        cities = sorted(county_data['RegionName'].unique())
-        return cities
-    
     try:
         states, state_county_map = get_states_and_counties()
     except Exception as e:
@@ -1350,32 +1378,6 @@ def main():
         counties = state_county_map[selected_state]
         selected_county = st.sidebar.selectbox("**County**", counties, key="county_select",
                                              help="Select the county for detailed analysis")
-        
-        if selected_county:
-            # Get cities for the selected county
-            cities = get_cities_for_county(selected_state, selected_county)
-            
-            # Add "All Cities" option
-            city_options = ["All Cities"] + cities
-            
-            selected_city = st.sidebar.selectbox("**City/Neighborhood**", city_options, key="city_select",
-                                               help="Select a specific city/neighborhood or view all cities in the county")
-            
-            # Show city selection info
-            if selected_city != "All Cities":
-                st.sidebar.markdown(f"""
-                <div style="background: #f0f9ff; border: 1px solid #0ea5e9; border-radius: 8px; padding: 10px; margin: 10px 0;">
-                    <strong>📍 Selected Area:</strong><br>
-                    {selected_city}, {selected_county} County, {selected_state}
-                </div>
-                """, unsafe_allow_html=True)
-            else:
-                st.sidebar.markdown(f"""
-                <div style="background: #f0f9ff; border: 1px solid #0ea5e9; border-radius: 8px; padding: 10px; margin: 10px 0;">
-                    <strong>📍 Selected Area:</strong><br>
-                    All Cities in {selected_county} County, {selected_state}
-                </div>
-                """, unsafe_allow_html=True)
         
         # Map style options
         st.sidebar.markdown('<div class="sidebar-section"><h3>🗺️ Map Configuration</h3></div>', unsafe_allow_html=True)
@@ -1395,7 +1397,7 @@ def main():
                                                      help="Maximum properties to display on map")
         
         # Progress indicator with professional UX
-        if selected_state and selected_county and selected_city:            
+        if selected_state and selected_county:            
             with st.spinner('Loading data and generating visualization...'):
                 # Use progress bar for better user feedback
                 progress_bar = st.progress(0)
@@ -1411,12 +1413,7 @@ def main():
                 progress_bar.progress(75)
                 
                 try:
-                    # Load data based on city selection
-                    if selected_city == "All Cities":
-                        data = load_area_data_optimized(selected_state, selected_county, network_available)
-                    else:
-                        data = load_city_data_optimized(selected_state, selected_county, selected_city, network_available)
-                    
+                    data = load_area_data_optimized(selected_state, selected_county, network_available)
                     progress_bar.progress(100)
                     status_text.text("Complete!")
                     
@@ -1425,7 +1422,7 @@ def main():
                     
                 except Exception as e:
                     st.error(f"Error loading data: {str(e)}")
-                    st.info("Try selecting a different state/county/city or check the logs")
+                    st.info("Try selecting a different state/county or check the logs")
                     return
                 finally:
                     # Clear progress indicators
