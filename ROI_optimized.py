@@ -1379,6 +1379,14 @@ def main():
         selected_county = st.sidebar.selectbox("**County**", counties, key="county_select",
                                              help="Select the county for detailed analysis")
         
+        if selected_county:
+            # Get cities for the selected county
+            cities = get_cities_for_county(selected_state, selected_county)
+            cities.insert(0, "All Cities")  # Add option to view all cities
+            
+            selected_city = st.sidebar.selectbox("**City/Neighborhood**", cities, key="city_select",
+                                               help="Select a specific city/neighborhood or view all cities in the county")
+        
         # Map style options
         st.sidebar.markdown('<div class="sidebar-section"><h3>🗺️ Map Configuration</h3></div>', unsafe_allow_html=True)
         use_satellite = st.sidebar.checkbox("Satellite View", value=False, 
@@ -1397,7 +1405,7 @@ def main():
                                                      help="Maximum properties to display on map")
         
         # Progress indicator with professional UX
-        if selected_state and selected_county:            
+        if selected_state and selected_county and selected_city:            
             with st.spinner('Loading data and generating visualization...'):
                 # Use progress bar for better user feedback
                 progress_bar = st.progress(0)
@@ -1413,7 +1421,14 @@ def main():
                 progress_bar.progress(75)
                 
                 try:
-                    data = load_area_data_optimized(selected_state, selected_county, network_available)
+                    # Load data based on city selection
+                    if selected_city and selected_city != "All Cities":
+                        # Load city-specific data
+                        data = load_city_data_optimized(selected_state, selected_county, selected_city, network_available)
+                    else:
+                        # Load county-level data
+                        data = load_area_data_optimized(selected_state, selected_county, network_available)
+                    
                     progress_bar.progress(100)
                     status_text.text("Complete!")
                     
