@@ -1404,18 +1404,7 @@ def main():
     </div>
     """, unsafe_allow_html=True)
     
-    # Special San Francisco Section
-    if selected_state == "CA" and selected_county == "San Francisco":
-        st.markdown("""
-        <div class="success-box">
-            <h3 style="margin-top: 0;">🏠 San Francisco Property Database Available!</h3>
-            <p style="margin-bottom: 0;">
-                <strong>Comprehensive SF real estate database</strong> with 525 properties across 21 neighborhoods. 
-                Complete property details, ROI analysis, and investment metrics ready for your analysis. 
-                Select "San Francisco" as your city to access the full database.
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
+    # Check network status
     
     # Check network status
     network_status = check_network_status()
@@ -1499,6 +1488,20 @@ def main():
                 """)
             except:
                 st.sidebar.markdown("**⚠️ SF Database not loaded**")
+        
+        # Main SF Property Database Section (when SF is selected)
+        if selected_state == "CA" and selected_county == "San Francisco":
+            st.markdown('<h3 class="section-header">🏠 San Francisco Property Database Available!</h3>', unsafe_allow_html=True)
+            st.markdown("""
+            <div class="success-box">
+                <h4 style="margin-top: 0;">✅ SF Property Database Ready!</h4>
+                <p style="margin-bottom: 0;">
+                    <strong>Comprehensive San Francisco real estate database</strong> with 525 properties across 21 neighborhoods. 
+                    Complete property details, ROI analysis, and investment metrics ready for your analysis. 
+                    Select a city/neighborhood below to access the full database.
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
         
         # Progress indicator with professional UX
         if selected_state and selected_county and selected_city:            
