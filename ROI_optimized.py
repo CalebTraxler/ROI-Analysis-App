@@ -719,6 +719,27 @@ def create_3d_roi_map_optimized(data, use_satellite=False, properties_df=None):
     else:
         logger.info("No properties data provided for map overlay")
 
+    # Add city boundaries layer
+    try:
+        # Get the county name from the data
+        county_name = data['CountyName'].iloc[0] if len(data) > 0 else None
+        state_name = data['State'].iloc[0] if len(data) > 0 else None
+        
+        if county_name and state_name:
+            # Get major cities in the county
+            major_cities = get_major_cities_in_county(county_name, state_name)
+            
+            # Add city boundaries for each major city
+            for city_name in major_cities:
+                city_boundaries_layer = create_city_boundaries_layer(city_name, state_name)
+                if city_boundaries_layer:
+                    layers.append(city_boundaries_layer)
+                    logger.info(f"Added city boundaries for {city_name}, {state_name}")
+                else:
+                    logger.warning(f"Failed to create city boundaries for {city_name}, {state_name}")
+    except Exception as e:
+        logger.warning(f"Error adding city boundaries: {e}")
+
     # FORCE OpenStreetMap tiles - this should work on Streamlit Cloud
     try:
         # Create a custom map style that forces OpenStreetMap tiles
@@ -974,6 +995,27 @@ def create_3d_roi_map_with_properties(data, use_satellite=False, properties_df=N
             logger.warning("No valid properties with coordinates found")
     else:
         logger.info(f"Properties not shown at zoom level {zoom} (requires zoom >= 12)")
+
+    # Add city boundaries layer
+    try:
+        # Get the county name from the data
+        county_name = data['CountyName'].iloc[0] if len(data) > 0 else None
+        state_name = data['State'].iloc[0] if len(data) > 0 else None
+        
+        if county_name and state_name:
+            # Get major cities in the county
+            major_cities = get_major_cities_in_county(county_name, state_name)
+            
+            # Add city boundaries for each major city
+            for city_name in major_cities:
+                city_boundaries_layer = create_city_boundaries_layer(city_name, state_name)
+                if city_boundaries_layer:
+                    layers.append(city_boundaries_layer)
+                    logger.info(f"Added city boundaries for {city_name}, {state_name}")
+                else:
+                    logger.warning(f"Failed to create city boundaries for {city_name}, {state_name}")
+    except Exception as e:
+        logger.warning(f"Error adding city boundaries: {e}")
 
     # FORCE OpenStreetMap tiles - this should work on Streamlit Cloud
     try:
