@@ -1313,6 +1313,63 @@ def create_properties_map(properties_df):
         logger.error(f"Error creating properties map: {e}")
         return None
 
+@st.cache_data(ttl=3600)
+def get_cities_for_county(state, county):
+    """Get cities/neighborhoods available for a specific county"""
+    df = preprocess_main_dataset()
+    county_data = df[(df['State'] == state) & (df['CountyName'] == county)]
+    cities = sorted(county_data['RegionName'].unique())
+    return cities
+
+@st.cache_data(ttl=3600)  # Cache for 1 hour
+def load_city_data_optimized(state, county, city, network_available=True):
+    """Load data for a specific city within a county"""
+    logger.info(f"Loading data for {city}, {county}, {state} (network available: {network_available})")
+    
+    # Load the main dataset
+    df = preprocess_main_dataset()
+    
+    # Filter by state, county, and city (RegionName)
+    filtered_df = df[(df['State'] == state) & 
+                      (df['CountyName'] == county) & 
+                      (df['RegionName'] == city)].copy()
+    
+    if len(filtered_df) == 0:
+        logger.warning(f"No data found for {city}, {county}, {state}")
+        return pd.DataFrame()
+    
+    # Get coordinates with fallback support
+    try:
+        coordinates = batch_geocode_with_fallback(
+            filtered_df['RegionName'].unique(), 
+            state, 
+            county, 
+            network_available
+        )
+    except Exception as e:
+        logger.error(f"Coordinate lookup failed for {city}, {county}, {state}: {e}")
+        coordinates = generate_fallback_coordinates(filtered_df['RegionName'].unique(), state, county)
+    
+    # Add coordinates to dataframe
+    filtered_df['Latitude'] = filtered_df['RegionName'].map(lambda x: coordinates.get(x, (None, None))[0] if coordinates.get(x) else None)
+    filtered_df['Longitude'] = filtered_df['RegionName'].map(lambda x: coordinates.get(x, (None, None))[1] if coordinates.get(x) else None)
+    
+    # Calculate ROI and current values
+    date_cols = [col for col in filtered_df.columns if len(col) == 10 and '-' in col]
+    if len(date_cols) >= 2:
+        date_cols.sort()
+        first_date = date_cols[0]
+        last_date = date_cols[-1]
+        
+        filtered_df['First_Value'] = pd.to_numeric(filtered_df[first_date], errors='coerce')
+        filtered_df['Current_Value'] = pd.to_numeric(filtered_df[last_date], errors='coerce')
+        
+        # Calculate ROI
+        filtered_df['ROI'] = ((filtered_df['Current_Value'] - filtered_df['First_Value']) / filtered_df['First_Value'] * 100).fillna(0)
+    
+    logger.info(f"Processed {len(filtered_df)} rows for {city}, {county}, {state} with {filtered_df['Latitude'].notna().sum()} valid coordinates")
+    return filtered_df
+
 # Main app section with performance optimizations
 def main():
     # Initialize session state for clicked properties
