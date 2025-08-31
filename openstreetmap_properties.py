@@ -532,57 +532,236 @@ class OpenStreetMapProperties:
         
         return tax_rates.get(state, tax_rates['default'])
     
-    def get_county_properties(self, county_name: str, state_name: str, 
-                            max_properties: int = 1000) -> pd.DataFrame:
-        """Main method to get all properties for a county"""
-        try:
-            # Check cache first
-            cache_key = f"{county_name}_{state_name}_properties"
-            cached_data = self._load_from_cache(cache_key)
-            
-            if cached_data is not None:
-                logger.info(f"Loaded {len(cached_data)} properties from cache for {county_name}, {state_name}")
-                return cached_data
-            
-            # Get county boundaries
-            bbox = self.get_county_boundaries(county_name, state_name)
-            if not bbox:
-                logger.error(f"Could not get boundaries for {county_name}, {state_name}")
-                return pd.DataFrame()
-            
-            # Fetch properties
-            logger.info(f"Fetching properties for {county_name}, {state_name}")
-            properties = self.fetch_properties_in_area(bbox)
-            
-            if not properties:
-                logger.warning(f"No properties found for {county_name}, {state_name}")
-                # Try alternative approaches
-                properties = self._try_alternative_approaches(county_name, state_name, bbox)
-            
-            if not properties:
-                logger.error(f"All property fetching methods failed for {county_name}, {state_name}")
-                return pd.DataFrame()
-            
-            # Limit properties if too many
-            if len(properties) > max_properties:
-                properties = properties[:max_properties]
-                logger.info(f"Limited to {max_properties} properties")
+    def get_county_properties(self, county_name: str, state_name: str, max_properties: int = 50000) -> pd.DataFrame:
+        """Get properties for a specific county with caching"""
+        cache_key = f"{county_name}_{state_name}"
+        
+        # Try to load from cache first
+        cached_data = self._load_from_cache(cache_key)
+        if cached_data is not None:
+            logger.info(f"Loaded {len(cached_data)} properties from cache for {county_name}, {state_name}")
+            return cached_data.head(max_properties)
+        
+        # Fetch fresh data
+        logger.info(f"Fetching properties for {county_name}, {state_name}")
+        properties = self.fetch_properties_for_county(county_name, state_name)
+        
+        if properties:
+            # Convert to DataFrame
+            df = pd.DataFrame(properties)
             
             # Enrich with additional data
-            enriched_properties = self.enrich_with_public_data(properties, county_name, state_name)
+            df = self._enrich_property_dataframe(df, county_name, state_name)
             
-            # Convert to DataFrame
-            df = pd.DataFrame(enriched_properties)
-            
-            # Save to cache
+            # Cache the results
             self._save_to_cache(cache_key, df)
             
             logger.info(f"Successfully fetched {len(df)} properties for {county_name}, {state_name}")
-            return df
+            return df.head(max_properties)
+        else:
+            logger.warning(f"No properties found for {county_name}, {state_name}")
+            return pd.DataFrame()
+    
+    def get_city_properties(self, city_name: str, county_name: str, state_name: str, max_properties: int = 50000) -> pd.DataFrame:
+        """Get properties for a specific city/neighborhood with city-specific boundaries"""
+        cache_key = f"{city_name}_{county_name}_{state_name}"
+        
+        # Try to load from cache first
+        cached_data = self._load_from_cache(cache_key)
+        if cached_data is not None:
+            logger.info(f"Loaded {len(cached_data)} properties from cache for {city_name}, {county_name}, {state_name}")
+            return cached_data.head(max_properties)
+        
+        # Fetch fresh data for the specific city
+        logger.info(f"Fetching properties for {city_name}, {county_name}, {state_name}")
+        properties = self.fetch_properties_for_city(city_name, county_name, state_name)
+        
+        if properties:
+            # Convert to DataFrame
+            df = pd.DataFrame(properties)
+            
+            # Enrich with additional data
+            df = self._enrich_property_dataframe(df, county_name, state_name)
+            
+            # Cache the results
+            self._save_to_cache(cache_key, df)
+            
+            logger.info(f"Successfully fetched {len(df)} properties for {city_name}, {county_name}, {state_name}")
+            return df.head(max_properties)
+        else:
+            logger.warning(f"No properties found for {city_name}, {county_name}, {state_name}")
+            return pd.DataFrame()
+    
+    def fetch_properties_for_city(self, city_name: str, county_name: str, state_name: str) -> List[Dict]:
+        """Fetch properties specifically for a city/neighborhood using city boundaries"""
+        properties = []
+        
+        try:
+            # Get city-specific boundaries using more targeted geocoding
+            city_bbox = self._get_city_boundaries(city_name, county_name, state_name)
+            
+            if city_bbox:
+                logger.info(f"Found city boundaries for {city_name}: {city_bbox}")
+                
+                # Use comprehensive search for city-level detail
+                city_properties = self._fetch_comprehensive_properties(city_bbox)
+                properties.extend(city_properties)
+                
+                if city_properties:
+                    logger.info(f"Found {len(city_properties)} properties in {city_name}")
+                else:
+                    logger.info(f"No properties found in city boundaries, trying broader search for {city_name}")
+                    # Fallback to broader search if city boundaries are too restrictive
+                    broader_bbox = self._expand_bbox_for_city(city_bbox)
+                    broader_properties = self._fetch_comprehensive_properties(broader_bbox)
+                    properties.extend(broader_properties)
+                    logger.info(f"Broader search found {len(broader_properties)} properties for {city_name}")
+            else:
+                logger.warning(f"Could not determine city boundaries for {city_name}, using county-level search")
+                # Fallback to county-level search
+                county_bbox = self.get_county_boundaries(county_name, state_name)
+                if county_bbox:
+                    # Filter properties by city name in address data
+                    county_properties = self._fetch_comprehensive_properties(county_bbox)
+                    city_properties = self._filter_properties_by_city(county_properties, city_name)
+                    properties.extend(city_properties)
+                    logger.info(f"County-level search with city filtering found {len(city_properties)} properties for {city_name}")
+        
+        except Exception as e:
+            logger.error(f"Error fetching city properties for {city_name}, {county_name}, {state_name}: {e}")
+            # Fallback to county-level search
+            try:
+                county_bbox = self.get_county_boundaries(county_name, state_name)
+                if county_bbox:
+                    county_properties = self._fetch_comprehensive_properties(county_bbox)
+                    city_properties = self._filter_properties_by_city(county_properties, city_name)
+                    properties.extend(city_properties)
+                    logger.info(f"Fallback county search found {len(city_properties)} properties for {city_name}")
+            except Exception as fallback_error:
+                logger.error(f"Fallback search also failed: {fallback_error}")
+        
+        return properties
+    
+    def _get_city_boundaries(self, city_name: str, county_name: str, state_name: str) -> Optional[Dict]:
+        """Get city-specific boundaries using targeted geocoding"""
+        try:
+            # Try multiple search strategies for city boundaries
+            search_queries = [
+                f"{city_name}, {county_name} County, {state_name}, USA",
+                f"{city_name}, {state_name}, USA",
+                f"{city_name}, {county_name}, {state_name}",
+                f"{city_name}, {state_name}",
+                f"{city_name}"
+            ]
+            
+            for search_query in search_queries:
+                try:
+                    logger.info(f"Trying to geocode city: {search_query}")
+                    location = self.geolocator.geocode(search_query, timeout=15)
+                    
+                    if location:
+                        # Create a city-appropriate bounding box
+                        # Cities typically have smaller bounding boxes than counties
+                        bbox_size = 0.02  # About 1-2 miles radius for city centers
+                        
+                        city_bbox = {
+                            'min_lat': location.latitude - bbox_size,
+                            'max_lat': location.latitude + bbox_size,
+                            'min_lon': location.longitude - bbox_size,
+                            'max_lon': location.longitude + bbox_size,
+                            'center_lat': location.latitude,
+                            'center_lon': location.longitude
+                        }
+                        
+                        logger.info(f"Found city boundaries for {search_query}: {city_bbox}")
+                        return city_bbox
+                    
+                    time.sleep(1)  # Rate limiting
+                    
+                except Exception as e:
+                    logger.debug(f"City geocoding failed for {search_query}: {e}")
+                    continue
+            
+            logger.warning(f"Could not geocode city boundaries for {city_name}")
+            return None
             
         except Exception as e:
-            logger.error(f"Error getting county properties: {e}")
-            return pd.DataFrame()
+            logger.error(f"Error in city boundary lookup: {e}")
+            return None
+    
+    def _expand_bbox_for_city(self, city_bbox: Dict) -> Dict:
+        """Expand city bounding box if it's too restrictive"""
+        expansion_factor = 2.5  # Expand by 2.5x if city boundaries are too small
+        
+        lat_range = city_bbox['max_lat'] - city_bbox['min_lat']
+        lon_range = city_bbox['max_lon'] - city_bbox['min_lon']
+        
+        # If the bounding box is very small, expand it
+        if lat_range < 0.01 or lon_range < 0.01:
+            lat_expansion = (0.01 - lat_range) / 2
+            lon_expansion = (0.01 - lon_range) / 2
+            
+            expanded_bbox = {
+                'min_lat': city_bbox['min_lat'] - lat_expansion,
+                'max_lat': city_bbox['max_lat'] + lat_expansion,
+                'min_lon': city_bbox['min_lon'] - lon_expansion,
+                'max_lon': city_bbox['max_lon'] + lon_expansion,
+                'center_lat': city_bbox['center_lat'],
+                'center_lon': city_bbox['center_lon']
+            }
+            
+            logger.info(f"Expanded city bounding box from {city_bbox} to {expanded_bbox}")
+            return expanded_bbox
+        
+        return city_bbox
+    
+    def _filter_properties_by_city(self, properties: List[Dict], city_name: str) -> List[Dict]:
+        """Filter properties to only include those in the specified city"""
+        city_properties = []
+        
+        for prop in properties:
+            # Check if property has city information
+            address = prop.get('address', {})
+            prop_city = address.get('city', '').lower()
+            
+            # Check if the property is in the target city
+            if (prop_city and city_name.lower() in prop_city) or \
+               (not prop_city and city_name.lower() in str(prop.get('osm_id', '')).lower()):
+                city_properties.append(prop)
+        
+        logger.info(f"Filtered {len(city_properties)} properties for city {city_name} from {len(properties)} total properties")
+        return city_properties
+
+    def fetch_properties_for_county(self, county_name: str, state_name: str) -> List[Dict]:
+        """Fetch properties for a specific county using the main fetch_properties_in_area"""
+        bbox = self.get_county_boundaries(county_name, state_name)
+        if not bbox:
+            logger.error(f"Could not get boundaries for {county_name}, {state_name}")
+            return []
+        return self.fetch_properties_in_area(bbox)
+    
+    def _enrich_property_dataframe(self, df: pd.DataFrame, county: str, state: str) -> pd.DataFrame:
+        """Enrich the DataFrame with additional public data (estimated value, tax rate)"""
+        enriched_df = df.copy()
+        
+        # Ensure 'latitude' and 'longitude' columns exist
+        if 'latitude' not in enriched_df.columns or 'longitude' not in enriched_df.columns:
+            logger.warning("Latitude or longitude columns not found in DataFrame. Cannot enrich.")
+            return enriched_df
+        
+        # Add estimated value
+        enriched_df['estimated_value'] = enriched_df.apply(
+            lambda row: self._estimate_property_value(row.to_dict()) if pd.notna(row['latitude']) and pd.notna(row['longitude']) else None,
+            axis=1
+        )
+        
+        # Add property tax rate
+        enriched_df['property_tax_rate'] = enriched_df.apply(
+            lambda row: self._get_tax_rate(county, state) if pd.notna(row['latitude']) and pd.notna(row['longitude']) else None,
+            axis=1
+        )
+        
+        return enriched_df
     
     def _try_alternative_approaches(self, county_name: str, state_name: str, original_bbox: Dict) -> List[Dict]:
         """Try alternative approaches when the main method fails"""

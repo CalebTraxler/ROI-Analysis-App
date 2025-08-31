@@ -1466,10 +1466,21 @@ def main():
                             with st.spinner('Loading comprehensive property data...'):
                                 try:
                                     osm_fetcher = OpenStreetMapProperties()
-                                    # Load maximum properties for comprehensive coverage
-                                    properties_df = osm_fetcher.get_county_properties(
-                                        selected_county, selected_state, max_properties=max_properties_display
-                                    )
+                                    
+                                    # Load properties based on city selection
+                                    if selected_city == "All Cities":
+                                        # Load county-level properties
+                                        properties_df = osm_fetcher.get_county_properties(
+                                            selected_county, selected_state, max_properties=max_properties_display
+                                        )
+                                        location_type = "county"
+                                    else:
+                                        # Load city-specific properties
+                                        properties_df = osm_fetcher.get_city_properties(
+                                            selected_city, selected_county, selected_state, max_properties=max_properties_display
+                                        )
+                                        location_type = "city"
+                                    
                                     if not properties_df.empty:
                                         total_props = len(properties_df)
                                         valid_coords = properties_df[properties_df['latitude'].notna() & properties_df['longitude'].notna()].shape[0]
@@ -1490,6 +1501,10 @@ def main():
                                                     <strong>Coverage Rate</strong>
                                                     <span style="color: #8b5cf6; font-size: 2rem;">{(valid_coords/total_props*100):.1f}%</span>
                                                 </div>
+                                                <div class="metric-container">
+                                                    <strong>Location Type</strong>
+                                                    <span style="color: #f59e0b; font-size: 1.5rem;">{location_type.title()}</span>
+                                                </div>
                                             </div>
                                         </div>
                                         """, unsafe_allow_html=True)
@@ -1502,11 +1517,22 @@ def main():
                                                 percentage = (count / total_props) * 100
                                                 st.markdown(f"**{prop_type.title()}**: {count:,} ({percentage:.1f}%)")
                                                 st.progress(percentage / 100)
+                                        
+                                        # Show location-specific info
+                                        if location_type == "city":
+                                            st.markdown(f"""
+                                            <div class="info-box">
+                                                <h5 style="margin-top: 0;">📍 City-Specific Properties</h5>
+                                                <p>Showing <strong>{len(properties_df)} properties</strong> specifically for <strong>{selected_city}</strong> in {selected_county} County, {selected_state}.</p>
+                                                <p><em>These properties are filtered to focus on your selected city/neighborhood area.</em></p>
+                                            </div>
+                                            """, unsafe_allow_html=True)
                                     else:
-                                        st.markdown("""
+                                        st.markdown(f"""
                                         <div class="warning-box">
                                             <h4 style="margin-top: 0;">⚠️ No Properties Found</h4>
-                                            <p>This could be due to limited OpenStreetMap coverage in rural areas or county boundary mismatches.</p>
+                                            <p>This could be due to limited OpenStreetMap coverage in the selected area or boundary mismatches.</p>
+                                            <p><strong>Selected:</strong> {selected_city if selected_city != "All Cities" else "All Cities"} in {selected_county} County, {selected_state}</p>
                                         </div>
                                         """, unsafe_allow_html=True)
                                 except Exception as e:
