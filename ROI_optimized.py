@@ -1404,6 +1404,19 @@ def main():
     </div>
     """, unsafe_allow_html=True)
     
+    # Special San Francisco Section
+    if selected_state == "CA" and selected_county == "San Francisco":
+        st.markdown("""
+        <div class="success-box">
+            <h3 style="margin-top: 0;">🏠 San Francisco Property Database Available!</h3>
+            <p style="margin-bottom: 0;">
+                <strong>Comprehensive SF real estate database</strong> with 525 properties across 21 neighborhoods. 
+                Complete property details, ROI analysis, and investment metrics ready for your analysis. 
+                Select "San Francisco" as your city to access the full database.
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+    
     # Check network status
     network_status = check_network_status()
     network_available = any(network_status.values())
@@ -1460,6 +1473,32 @@ def main():
                                             help="Properties become visible at this zoom level")
             max_properties_display = st.sidebar.slider("Max Properties", min_value=1000, max_value=100000, value=50000,
                                                      help="Maximum properties to display on map")
+        
+        # San Francisco Special Section
+        if selected_state == "CA" and selected_county == "San Francisco":
+            st.sidebar.markdown('<div class="sidebar-section"><h3>🏠 SF Property Database</h3></div>', unsafe_allow_html=True)
+            st.sidebar.markdown("""
+            **📊 Database Status:**
+            - 525 Properties
+            - 21 Neighborhoods
+            - Complete ROI Analysis
+            - Ready for ML Training
+            """)
+            
+            # Quick SF stats
+            try:
+                sf_properties = pd.read_csv("sf_properties_roi_integration.csv")
+                avg_price = sf_properties['Price'].mean()
+                avg_roi = sf_properties['ROI'].mean()
+                
+                st.sidebar.markdown(f"""
+                **💰 Quick Stats:**
+                - Avg Price: ${avg_price:,.0f}
+                - Avg ROI: {avg_roi:.2f}%
+                - Coverage: 100%
+                """)
+            except:
+                st.sidebar.markdown("**⚠️ SF Database not loaded**")
         
         # Progress indicator with professional UX
         if selected_state and selected_county and selected_city:            
@@ -1925,6 +1964,145 @@ def main():
                                     providing valuable insights for investment analysis and market understanding.</p>
                                 </div>
                                 """, unsafe_allow_html=True)
+                        
+                        # SF Properties Integration Section
+                        if selected_state == "CA" and selected_county == "San Francisco":
+                            st.markdown('<h3 class="section-header">🏠 San Francisco Comprehensive Property Database</h3>', unsafe_allow_html=True)
+                            
+                            try:
+                                # Load SF properties data
+                                sf_properties = pd.read_csv("sf_properties_roi_integration.csv")
+                                
+                                st.markdown(f"""
+                                <div class="success-box">
+                                    <h4 style="margin-top: 0;">✅ SF Property Database Loaded Successfully!</h4>
+                                    <p><strong>Comprehensive San Francisco real estate database</strong> with {len(sf_properties):,} properties across 21 neighborhoods.</p>
+                                </div>
+                                """, unsafe_allow_html=True)
+                                
+                                # Display SF property statistics
+                                col1, col2, col3, col4 = st.columns(4)
+                                with col1:
+                                    avg_price = sf_properties['Price'].mean()
+                                    st.markdown(f'<div class="metric-container"><strong>Average Price</strong><br><span style="font-size: 1.5rem; color: #3b82f6;">${avg_price:,.0f}</span></div>', unsafe_allow_html=True)
+                                with col2:
+                                    avg_roi = sf_properties['ROI'].mean()
+                                    st.markdown(f'<div class="metric-container"><strong>Average ROI</strong><br><span style="font-size: 1.5rem; color: #3b82f6;">{avg_roi:.2f}%</span></div>', unsafe_allow_html=True)
+                                with col3:
+                                    total_neighborhoods = sf_properties['Neighborhood'].nunique()
+                                    st.markdown(f'<div class="metric-container"><strong>Neighborhoods</strong><br><span style="font-size: 1.5rem; color: #3b82f6;">{total_neighborhoods}</span></div>', unsafe_allow_html=True)
+                                with col4:
+                                    avg_sqft = sf_properties['Square_Footage'].mean()
+                                    st.markdown(f'<div class="metric-container"><strong>Avg Sq Ft</strong><br><span style="font-size: 1.5rem; color: #3b82f6;">{avg_sqft:.0f}</span></div>', unsafe_allow_html=True)
+                                
+                                # Neighborhood analysis
+                                st.markdown('<h4 style="margin: 2rem 0 1rem 0; color: #4f46e5;">🏘️ Neighborhood Analysis</h4>', unsafe_allow_html=True)
+                                
+                                # Create neighborhood summary
+                                neighborhood_summary = sf_properties.groupby('Neighborhood').agg({
+                                    'Price': ['count', 'mean', 'min', 'max'],
+                                    'ROI': 'mean',
+                                    'Square_Footage': 'mean'
+                                }).round(2)
+                                
+                                # Flatten column names
+                                neighborhood_summary.columns = ['Property_Count', 'Avg_Price', 'Min_Price', 'Max_Price', 'Avg_ROI', 'Avg_Sqft']
+                                neighborhood_summary = neighborhood_summary.reset_index()
+                                
+                                # Display neighborhood summary
+                                st.dataframe(neighborhood_summary, use_container_width=True, hide_index=True)
+                                
+                                # Property details expander
+                                with st.expander("🔍 View Individual SF Properties", expanded=False):
+                                    st.markdown("**Filter Properties by Neighborhood:**")
+                                    
+                                    # Neighborhood filter
+                                    selected_neighborhood = st.selectbox(
+                                        "Select Neighborhood:",
+                                        ["All"] + sorted(sf_properties['Neighborhood'].unique().tolist()),
+                                        key="sf_neighborhood_filter"
+                                    )
+                                    
+                                    # Filter data
+                                    if selected_neighborhood == "All":
+                                        filtered_sf = sf_properties
+                                    else:
+                                        filtered_sf = sf_properties[sf_properties['Neighborhood'] == selected_neighborhood]
+                                    
+                                    # Display filtered properties
+                                    display_columns = ['Address', 'Neighborhood', 'Price', 'Square_Footage', 'Bedrooms', 'Bathrooms', 'ROI', 'Walk_Score']
+                                    st.dataframe(filtered_sf[display_columns], use_container_width=True, hide_index=True)
+                                    
+                                    # Download filtered data
+                                    filtered_csv = filtered_sf.to_csv(index=False)
+                                    st.download_button(
+                                        label=f"📥 Download {selected_neighborhood} Properties (CSV)",
+                                        data=filtered_csv,
+                                        file_name=f"sf_{selected_neighborhood.lower().replace(' ', '_')}_properties.csv",
+                                        mime="text/csv"
+                                    )
+                                
+                                # ROI Analysis Section
+                                st.markdown('<h4 style="margin: 2rem 0 1rem 0; color: #4f46e5;">📊 ROI Investment Analysis</h4>', unsafe_allow_html=True)
+                                
+                                # ROI distribution
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    st.markdown("**ROI Distribution by Neighborhood:**")
+                                    roi_by_neighborhood = sf_properties.groupby('Neighborhood')['ROI'].mean().sort_values(ascending=False)
+                                    st.bar_chart(roi_by_neighborhood)
+                                
+                                with col2:
+                                    st.markdown("**Price vs ROI Correlation:**")
+                                    price_roi_data = sf_properties[['Price', 'ROI']].copy()
+                                    st.scatter_chart(price_roi_data, x='Price', y='ROI')
+                                
+                                # Investment recommendations
+                                st.markdown('<h5 style="margin: 1.5rem 0 1rem 0; color: #059669;">💡 Investment Recommendations</h5>', unsafe_allow_html=True)
+                                
+                                # Find best ROI properties
+                                best_roi_properties = sf_properties.nlargest(5, 'ROI')[['Address', 'Neighborhood', 'Price', 'ROI', 'Square_Footage']]
+                                
+                                st.markdown("**🏆 Top 5 ROI Properties:**")
+                                st.dataframe(best_roi_properties, use_container_width=True, hide_index=True)
+                                
+                                # Find best value properties (price per sqft)
+                                best_value_properties = sf_properties.nsmallest(5, 'Price_Per_Sqft')[['Address', 'Neighborhood', 'Price', 'Price_Per_Sqft', 'Square_Footage']]
+                                
+                                st.markdown("**💰 Best Value Properties (Lowest Price per Sq Ft):**")
+                                st.dataframe(best_value_properties, use_container_width=True, hide_index=True)
+                                
+                                # Download complete SF database
+                                st.markdown('<h5 style="margin: 1.5rem 0 1rem 0; color: #dc2626;">💾 Download Complete SF Database</h5>', unsafe_allow_html=True)
+                                
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    sf_csv = sf_properties.to_csv(index=False)
+                                    st.download_button(
+                                        label="📥 Download Complete SF Database (CSV)",
+                                        data=sf_csv,
+                                        file_name="comprehensive_sf_properties_database.csv",
+                                        mime="text/csv",
+                                        help="Complete San Francisco property database with ROI analysis"
+                                    )
+                                
+                                with col2:
+                                    st.markdown("""
+                                    <div class="info-box">
+                                        <p><strong>Database Features:</strong></p>
+                                        <ul>
+                                            <li>525 properties across 21 neighborhoods</li>
+                                            <li>Complete property details & features</li>
+                                            <li>ROI calculations & investment metrics</li>
+                                            <li>Walk/transit scores & school districts</li>
+                                            <li>Ready for ML model training</li>
+                                        </ul>
+                                    </div>
+                                    """, unsafe_allow_html=True)
+                                
+                            except Exception as e:
+                                st.error(f"Error loading SF properties: {e}")
+                                st.info("Make sure 'sf_properties_roi_integration.csv' is in the same directory")
                         
                         # Professional data export section
                         with st.expander("💾 Export Property Intelligence Data", expanded=False):
